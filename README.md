@@ -1,4 +1,15 @@
-# Argus
+<p align="center">
+  <img src="docs/logo.png" alt="Argus" width="200">
+</p>
+
+<h1 align="center">Argus</h1>
+
+<p align="center">
+  <a href="https://github.com/tsdaemon/argus/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT"></a>
+  <img src="https://img.shields.io/badge/python-3.11%2B-blue.svg" alt="Python 3.11+">
+  <a href="https://gofastmcp.com"><img src="https://img.shields.io/badge/MCP-FastMCP-6f42c1.svg" alt="Built on FastMCP"></a>
+  <a href="https://github.com/astral-sh/ruff"><img src="https://img.shields.io/badge/lint-ruff-brightgreen.svg" alt="Linted with ruff"></a>
+</p>
 
 A pluggable, policy-gated MCP server for operating home infrastructure — without handing an
 agent raw shell access.
