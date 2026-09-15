@@ -1,0 +1,78 @@
+version: "3"
+
+dotenv: [".env"]
+
+tasks:
+  install:
+    desc: Install dependencies (incl. dev tools) into a local venv via uv.
+    cmds:
+      - uv sync --extra dev
+
+  test:
+    desc: Run the test suite.
+    cmds:
+      - uv run pytest
+
+  lint:
+    desc: Lint with ruff.
+    cmds:
+      - uv run ruff check src tests
+
+  run:
+    desc: Run the MCP server locally over stdio (no network exposure, no token needed).
+    cmds:
+      - uv run argus serve --config examples/argus.example.yaml --transport stdio
+
+  serve:
+    desc: Run the MCP server locally over HTTP (needs ARGUS_MCP_TOKEN in .env).
+    cmds:
+      - uv run argus serve --config examples/argus.example.yaml
+
+  breakglass:list:
+    desc: List break-glass requests in the local example config's store.
+    cmds:
+      - uv run argus breakglass list --config examples/argus.example.yaml
+
+  docker:build:
+    desc: Build the Argus image.
+    cmds:
+      - docker build -t argus-mcp:local .
+
+  docker:up:
+    desc: Run Argus via docker compose (needs .env — see .env.example).
+    cmds:
+      - docker compose up -d --build
+
+  docker:down:
+    desc: Stop the docker compose stack.
+    cmds:
+      - docker compose down
+
+  docker:logs:
+    desc: Follow the docker compose service's logs.
+    cmds:
+      - docker compose logs -f
+
+  # --- theseus deployment (see the homelab-compose-deploy skill / README) -----------
+  # Needs docker-compose.deploy.yml (gitignored — copy docker-compose.deploy.yml.example)
+  # and .env.deploy (gitignored — copy .env.deploy.example) to exist first.
+
+  deploy:
+    desc: Deploy to theseus.
+    dotenv: [".env.deploy"]
+    cmds:
+      - docker --context theseus compose -f docker-compose.yml -f docker-compose.deploy.yml
+        up -d --build
+
+  deploy:down:
+    desc: Stop Argus on theseus.
+    dotenv: [".env.deploy"]
+    cmds:
+      - docker --context theseus compose -f docker-compose.yml -f docker-compose.deploy.yml down
+
+  deploy:logs:
+    desc: Follow Argus's logs on theseus.
+    dotenv: [".env.deploy"]
+    cmds:
+      - docker --context theseus compose -f docker-compose.yml -f docker-compose.deploy.yml
+        logs -f

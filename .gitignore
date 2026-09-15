@@ -1,0 +1,18 @@
+__pycache__/
+*.pyc
+.venv/
+.env
+.env.deploy
+*.local.yaml
+*.sqlite
+*.sqlite3
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+dist/
+build/
+
+# theseus-specific deploy overlay: real hostnames/labels for one personal deployment,
+# deliberately kept out of this generic repo. Copy docker-compose.deploy.yml.example
+# to get started.
+docker-compose.deploy.yml

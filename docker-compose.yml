@@ -1,0 +1,21 @@
+services:
+  argus:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "${APP_PORT:-8420}:8420"
+    environment:
+      ARGUS_MCP_TOKEN: ${ARGUS_MCP_TOKEN}
+      ARGUS_NTFY_TOPIC_URL: ${ARGUS_NTFY_TOPIC_URL:-}
+    volumes:
+      - ${CONFIG_FILE:-./examples/argus.example.yaml}:/config/argus.yaml:ro
+      # Named volume, not a host bind mount, for the breakglass sqlite store — matches
+      # examples/argus.example.yaml's store_path (/var/lib/argus/...).
+      - argus-state:/var/lib/argus
+      # Lets the docker provider talk to your daemon. Scope what it can see via
+      # allowed_containers in the mounted config, not via this mount — a read-only
+      # bind here would restrict changes to the socket *file*, not calls sent over it.
+      - /var/run/docker.sock:/var/run/docker.sock
+
+volumes:
+  argus-state:

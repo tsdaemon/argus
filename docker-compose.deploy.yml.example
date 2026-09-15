@@ -1,0 +1,46 @@
+# Theseus deploy overlay template — copy to docker-compose.deploy.yml (gitignored,
+# kept out of this generic repo on purpose) and fill in the placeholders.
+#
+# Deploy with:
+#   docker --context theseus compose -f docker-compose.yml -f docker-compose.deploy.yml \
+#     up -d --build
+# (wrapped as `task deploy` — see Taskfile.yaml, dotenv: ['.env.deploy']).
+
+services:
+  argus:
+    restart: unless-stopped
+    # Traefik on theseus discovers containers over the Docker socket via labels —
+    # no shared network to join. web_local only: plain HTTP, LAN-only hostname. If
+    # /breakglass needs to be reachable from off-LAN, route it through the existing
+    # Cloudflare Tunnel separately (path-route just /breakglass and /launch, not
+    # /mcp — see the homelab-compose-deploy skill's Cloudflare Tunnel section).
+    # /mcp itself has no business being reachable from outside the LAN/tailnet at
+    # all: it's the whole agent-facing control plane, guarded only by one bearer
+    # token, not something to hand the public internet a shot at.
+    labels:
+      traefik.enable: "true"
+      traefik.http.routers.argus.rule: "Host(`${APP_HOSTNAME_LOCAL}`)"
+      traefik.http.routers.argus.entrypoints: "web_local"
+      traefik.http.services.argus.loadbalancer.server.port: "8420"
+      # mdi-eye-outline: a built-in Homepage icon slug, not an app-served one — Argus
+      # has no icon endpoint of its own, unlike the skill's usual pattern.
+      homepage.icon: mdi-eye-outline
+      homepage.name: Argus
+      # LAN-local by design, not APP_PUBLIC_URL (the skill's usual pattern): Homepage
+      # itself is a LAN dashboard, and /mcp deliberately has no public URL to begin
+      # with. No token in this URL — /breakglass is its own login (generated admin
+      # account, first visit to /login shows the password once).
+      homepage.href: "http://${APP_HOSTNAME_LOCAL}/breakglass"
+      homepage.description: NAS/network ops MCP server
+    # Dev-only host publish isn't needed once Traefik can reach the container
+    # directly over the Docker network.
+    ports: !reset []
+    environment:
+      ARGUS_MCP_TOKEN: ${DEPLOY_ARGUS_MCP_TOKEN}
+      ARGUS_NTFY_TOPIC_URL: ${ARGUS_NTFY_TOPIC_URL:-}
+    volumes:
+      - ${CONFIG_FILE:-./examples/theseus.argus.yaml}:/config/argus.yaml:ro
+      - argus-state:/var/lib/argus
+      - /var/run/docker.sock:/var/run/docker.sock
+      # Only if breakglass.launcher is configured in the mounted config:
+      # - ${ARGUS_LAUNCHER_KEY_PATH}:/run/secrets/argus_launcher_key:ro

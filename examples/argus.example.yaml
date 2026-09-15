@@ -1,0 +1,60 @@
+# Argus example config — every knob, heavily commented, no real hosts.
+#
+# A `${...}`-style reference anywhere in this file (see `topic_url` below) is expanded
+# from the environment at load time, so secrets never need to be committed here.
+
+providers:
+  # --- Docker: container visibility (read) + restart (mutate) -------------------------
+  docker:
+    enabled: true
+    # Unix socket or tcp:// URL for the Docker daemon this deployment talks to.
+    socket: unix:///var/run/docker.sock
+    # If set, only these container names are visible to *any* docker tool, including
+    # reads. Omit (or leave unset) to allow all containers on the socket — not
+    # recommended unless the socket itself is already scoped to what you want exposed.
+    allowed_containers:
+      - example-service-a
+      - example-service-b
+
+  # --- Break-glass: the unattended-run escape hatch --------------------------------
+  breakglass:
+    enabled: true
+    # Where the sqlite request store lives. Shared by the /breakglass web view (mounted
+    # on the same argus serve process, see README) and the `argus breakglass` CLI.
+    store_path: /var/lib/argus/breakglass.sqlite
+    # Base URL of this deployment's own /breakglass page, used to build a clickable link
+    # in the push notification below. Leave unset to skip the link.
+    approval_url: https://argus.example.internal
+    # Optional: push a notification when a break-glass request is filed, so a human
+    # finds out promptly instead of only on the next time they happen to check.
+    notify:
+      type: ntfy
+      # Treat this like a shared secret: whoever knows the topic name can read your
+      # pushes on the public ntfy.sh instance. Self-host ntfy, or use a private/
+      # authenticated topic, for anything sensitive.
+      topic_url: ${ARGUS_NTFY_TOPIC_URL}
+    # Optional: lets approving a request (or the manual /launch page) start a Claude
+    # Code session on a host, seeded with the request's context. Off by default — see
+    # the README's "Session launch" section for the one-time host setup this requires
+    # (a forced-command SSH key is the actual security boundary here, not this config).
+    # launcher:
+    #   type: ssh
+    #   host: argus-target.example.internal
+    #   user: argus-launcher
+    #   identity_file: /run/secrets/argus_launcher_key
+    #   permission_mode: acceptEdits   # manual | acceptEdits | dontAsk | auto
+    #   ttl_seconds: 14400              # kills the session after 4h regardless; optional
+
+# --- Policy: the actual security boundary ------------------------------------------
+policy:
+  # What happens to a MUTATE tool with no explicit override below.
+  default_mutate: require_approval # allow | require_approval | deny
+  # What happens to a DESTRUCTIVE tool with no explicit override below. "deny" means
+  # it is never even registered — it does not exist in the tool list an agent sees.
+  default_destructive: deny
+  # Per-tool overrides, keyed "<provider>.<tool_name>". Anything not listed here uses
+  # the class default above.
+  overrides: {}
+  # Example: allow container restarts without a prompt for one low-stakes service,
+  # while everything else stays gated behind approval:
+  #   docker.restart_container: require_approval

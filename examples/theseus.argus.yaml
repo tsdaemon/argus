@@ -1,0 +1,54 @@
+# A real-shaped Argus config for the "theseus" NAS (https://github.com/tsdaemon/theseus).
+# No secrets here — the ntfy topic and break-glass token are supplied via environment
+# variables at runtime, not committed. This file is an example of wiring a real
+# deployment's config, not something the argus-mcp package itself depends on.
+
+providers:
+  docker:
+    enabled: true
+    socket: unix:///var/run/docker.sock
+    # Compose service names from theseus's roles/applications/*. Trim this to whatever
+    # you actually want an agent to see/restart — it does not need to match every
+    # application role theseus provisions.
+    allowed_containers:
+      - qbittorrent
+      - plex
+      - lidarr
+      - prowlarr
+      - navidrome
+      - immich
+      - stash
+      - n8n
+      - ubooquity
+      - calibre
+      - frigate
+      - gramps
+      - baserow
+
+  breakglass:
+    enabled: true
+    store_path: /opt/docker-data/argus/breakglass.sqlite
+    approval_url: https://argus.theseus.internal
+    notify:
+      type: ntfy
+      topic_url: ${ARGUS_NTFY_TOPIC_URL}
+    # Set up once by hand on theseus itself (claude CLI logged in, workspace trust
+    # accepted, forced-command SSH key in authorized_keys) before enabling this — see
+    # the README's "Session launch" section. 127.0.0.1 here assumes Argus's container
+    # shares theseus's network namespace/stack; use the LAN address otherwise.
+    # launcher:
+    #   type: ssh
+    #   host: 127.0.0.1
+    #   user: argus-launcher
+    #   identity_file: /run/secrets/argus_launcher_key
+    #   permission_mode: acceptEdits
+    #   ttl_seconds: 14400
+
+policy:
+  default_mutate: require_approval
+  default_destructive: deny
+  overrides:
+    # Explicit, matching the design discussion: restarts always prompt, even though
+    # that's already the default_mutate behavior — spelled out here so it survives a
+    # future change to the default without silently loosening this one.
+    docker.restart_container: require_approval
