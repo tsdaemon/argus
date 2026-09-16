@@ -1,7 +1,7 @@
 """The extension point: what a pluggable Argus backend looks like.
 
 Adding a new provider (systemd, disk/SMART, network ping, ...) means writing a class that
-satisfies this protocol and adding one line to `PROVIDER_REGISTRY` in `argus.server` — no
+satisfies this protocol and adding one line to `PROVIDER_REGISTRY` in `argus.mcp.server` — no
 changes to the policy engine, approval backends, or any other provider.
 """
 

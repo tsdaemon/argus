@@ -31,19 +31,28 @@ optional path to actually spin up a privileged Claude Code session on a real hos
 
 | Concern | File |
 |---|---|
-| Tool classification + enforcement (the actual security boundary) | `src/argus/policy.py` |
-| Approval via real MCP elicitation, fails closed | `src/argus/approval/elicit.py` |
+| Tool classification + enforcement (the actual security boundary), transport-agnostic | `src/argus/policy.py` |
+| Approval `ApprovalBackend` protocol (transport-agnostic) | `src/argus/approval/__init__.py` |
+| Approval via real MCP elicitation, fails closed (MCP-specific) | `src/argus/mcp/elicit.py` |
 | Config schema + `${ENV_VAR}` expansion | `src/argus/config.py` |
-| `/mcp` bearer auth | `src/argus/auth.py` |
-| Server assembly, provider registry, combined HTTP app | `src/argus/server.py` |
+| `/mcp` bearer auth | `src/argus/mcp/auth.py` |
+| MCP server assembly, provider registry, combined HTTP app | `src/argus/mcp/server.py` |
 | CLI (`argus serve`, `argus breakglass ...`) | `src/argus/cli.py` |
 | Docker provider (list/status/logs/inspect/restart) | `src/argus/providers/docker_provider.py` |
 | Break-glass provider + sqlite store | `src/argus/providers/breakglass_provider.py` |
-| Break-glass web UI (login-gated) | `src/argus/webapp.py` |
-| Generated-admin-account login + signed sessions | `src/argus/webauth.py` |
+| Break-glass web UI (login-gated) | `src/argus/mcp/webapp.py` |
+| Generated-admin-account login + signed sessions (shared, not MCP-specific) | `src/argus/webauth.py` |
 | ntfy push notifications | `src/argus/notify/` |
-| SSH-based host session launcher (Argus side) | `src/argus/launcher/ssh.py` |
+| SSH-based host session launcher (Argus side, shared) | `src/argus/launcher/ssh.py` |
 | Forced-command host script (deployed separately, on the target host) | `src/argus/host_launch.py` |
+
+`src/argus/mcp/` holds everything specific to the standalone MCP server surface (FastMCP
+server assembly, `/mcp` auth, the break-glass web view). Everything else at the top level of
+`src/argus/` (`policy.py`, `config.py`, `webauth.py`, `providers/`, `approval/` protocol,
+`launcher/`, `notify/`, `host_launch.py`) is shared and transport-agnostic — an in-process
+LangGraph agent harness (planned, not yet built) is meant to bind the same `providers/` tool
+implementations directly, without going through `/mcp` at all. `mcp/` and any future agent
+package should only ever depend on the shared top level, never on each other.
 
 Extension point: a provider is a class with `name` + `register(mcp, policy, config)`, registered
 in `PROVIDER_REGISTRY` in `server.py`. Use `policy.register(...)` instead of `@mcp.tool`

@@ -150,7 +150,7 @@ def create_app(
 ) -> Starlette:
     """A bare Starlette app carrying only the break-glass routes. Handy standalone (e.g.
     for tests); in a real deployment these routes are mounted onto the MCP app instead
-    (see `argus.server.build_http_app`) so the whole thing is one process/port."""
+    (see `argus.mcp.server.build_http_app`) so the whole thing is one process/port."""
     app = Starlette()
     add_breakglass_routes(app, store, admin_store, launcher)
     return app

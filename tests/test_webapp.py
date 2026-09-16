@@ -5,8 +5,8 @@ from pathlib import Path
 import pytest
 from starlette.testclient import TestClient
 
+from argus.mcp.webapp import SESSION_COOKIE, create_app
 from argus.providers.breakglass_provider import APPROVED, PENDING, BreakGlassStore
-from argus.webapp import SESSION_COOKIE, create_app
 from argus.webauth import AdminUserStore
 
 

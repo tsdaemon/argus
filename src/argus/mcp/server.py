@@ -13,13 +13,13 @@ from fastmcp import FastMCP
 from fastmcp.server.auth import AuthProvider
 from fastmcp.server.http import StarletteWithLifespan
 
-from argus.approval.elicit import ElicitApproval
 from argus.config import ArgusConfig
+from argus.mcp.elicit import ElicitApproval
+from argus.mcp.webapp import add_breakglass_routes
 from argus.policy import PolicyEngine
 from argus.providers.base import Provider
 from argus.providers.breakglass_provider import BreakglassProvider
 from argus.providers.docker_provider import DockerProvider
-from argus.webapp import add_breakglass_routes
 
 PROVIDER_REGISTRY: dict[str, type[Provider]] = {
     "docker": DockerProvider,

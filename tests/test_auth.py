@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from argus.auth import StaticTokenVerifier
+from argus.mcp.auth import StaticTokenVerifier
 
 
 @pytest.mark.asyncio

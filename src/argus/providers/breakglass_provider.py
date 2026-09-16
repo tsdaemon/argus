@@ -5,11 +5,11 @@ something through the read/mutate tools it has. It is classified READ, deliberat
 cannot mutate anything on the target system, it can only record that a human's attention is
 needed. There is no tool anywhere on this MCP server that approves or executes a break-glass
 request — that happens entirely outside the MCP surface, via the phone-reachable web view in
-`argus.webapp` (or the `argus breakglass` CLI as a local convenience). Approving a request
+`argus.mcp.webapp` (or the `argus breakglass` CLI as a local convenience). Approving a request
 does not grant any access by itself; it only marks intent so the human can go open a scoped
 session themselves.
 
-`BreakGlassStore` is the shared sqlite-backed store both this provider and `argus.webapp` /
+`BreakGlassStore` is the shared sqlite-backed store both this provider and `argus.mcp.webapp` /
 `argus.cli` read and write. Login to that web view is a generated admin account (see
 `argus.webauth.AdminUserStore`) rather than a pre-shared token — no secret to configure,
 and no secret ever ends up sitting in a bookmarked URL.
@@ -132,7 +132,7 @@ class BreakglassProvider:
         self.admin_store = AdminUserStore(store_path)
         self._approval_url = config.get("approval_url")
         self._notifier: Notifier = build_notifier(config.get("notify"))
-        # Not agent-reachable: only used from the human-facing web view (argus.webapp),
+        # Not agent-reachable: only used from the human-facing web view (argus.mcp.webapp),
         # never from the request_break_glass tool itself. See argus.launcher for why.
         self.launcher: HostLauncher | None = build_launcher(config.get("launcher"))
 

@@ -1,7 +1,7 @@
 """Pluggable "start a privileged Claude Code session on the host" trigger.
 
 Deliberately narrow, and deliberately not an MCP tool: nothing here is reachable by an
-agent. It's only ever called from the human-facing break-glass web view (`argus.webapp`),
+agent. It's only ever called from the human-facing break-glass web view (`argus.mcp.webapp`),
 either when a human approves a specific request or when they trigger a session manually
 on their own initiative.
 

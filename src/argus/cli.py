@@ -11,10 +11,10 @@ import argparse
 import os
 import sys
 
-from argus.auth import StaticTokenVerifier
 from argus.config import load_config
+from argus.mcp.auth import StaticTokenVerifier
+from argus.mcp.server import build_http_app, build_server
 from argus.providers.breakglass_provider import APPROVED, DENIED, BreakGlassStore
-from argus.server import build_http_app, build_server
 
 
 def _resolve_store(args: argparse.Namespace) -> BreakGlassStore:
