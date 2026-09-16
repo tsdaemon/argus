@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from argus.config import load_config
+from argus.config import AgentConfig, load_config
 from argus.policy import PolicyDecision
 
 
@@ -85,3 +85,36 @@ def test_defaults_and_overrides_parse_into_policy_decisions(tmp_path: Path):
 
     assert config.policy.default_mutate is PolicyDecision.ALLOW
     assert config.policy.overrides["docker.restart_container"] is PolicyDecision.REQUIRE_APPROVAL
+
+
+def test_agent_config_defaults_when_section_omitted(tmp_path: Path):
+    path = write_config(tmp_path, "providers: {}\n")
+
+    config = load_config(path)
+
+    assert config.agent == AgentConfig()
+
+
+def test_agent_config_section_overrides_defaults(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    path = write_config(
+        tmp_path,
+        """
+        agent:
+          workspace_root: /data/agent-workspace
+          database_url: postgresql://argus:argus@postgres:5432/argus
+          model: openai/gpt-5.2
+          api_key: ${ARGUS_TEST_OPENROUTER_KEY}
+          otel:
+            enabled: true
+            endpoint: http://phoenix:4317
+        """,
+    )
+    monkeypatch.setenv("ARGUS_TEST_OPENROUTER_KEY", "sk-or-fake")
+
+    config = load_config(path)
+
+    assert config.agent.workspace_root == "/data/agent-workspace"
+    assert config.agent.model == "openai/gpt-5.2"
+    assert config.agent.api_key == "sk-or-fake"
+    assert config.agent.otel.enabled is True
+    assert config.agent.otel.endpoint == "http://phoenix:4317"

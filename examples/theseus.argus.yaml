@@ -7,23 +7,9 @@ providers:
   docker:
     enabled: true
     socket: unix:///var/run/docker.sock
-    # Compose service names from theseus's roles/applications/*. Trim this to whatever
-    # you actually want an agent to see/restart — it does not need to match every
-    # application role theseus provisions.
-    allowed_containers:
-      - qbittorrent
-      - plex
-      - lidarr
-      - prowlarr
-      - navidrome
-      - immich
-      - stash
-      - n8n
-      - ubooquity
-      - calibre
-      - frigate
-      - gramps
-      - baserow
+    # No allowed_containers here: every container on theseus is visible to the agent.
+    # Set allowed_containers: [...] (compose service names from theseus's
+    # roles/applications/*) to scope this down to a subset instead.
 
   breakglass:
     enabled: true

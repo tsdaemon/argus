@@ -27,6 +27,7 @@ from typing import Any
 from argus.launcher import HostLauncher, build_launcher
 from argus.notify import Notifier, build_notifier
 from argus.policy import PolicyEngine, ToolClass
+from argus.providers.base import ToolSpec, mcp_bind
 from argus.webauth import AdminUserStore
 
 PENDING = "pending"
@@ -136,17 +137,11 @@ class BreakglassProvider:
         # never from the request_break_glass tool itself. See argus.launcher for why.
         self.launcher: HostLauncher | None = build_launcher(config.get("launcher"))
 
-    def register(self, mcp: Any, policy: PolicyEngine, config: dict[str, Any]) -> None:
+    def tool_specs(self, config: dict[str, Any]) -> list[ToolSpec]:
         store = self.store
         notifier = self._notifier
         approval_url = self._approval_url
 
-        @policy.register(
-            mcp,
-            tool_id="breakglass.request_break_glass",
-            tool_class=ToolClass.READ,
-            summary="File a break-glass escalation request. Cannot grant any access by itself.",
-        )
         async def request_break_glass(
             reason: str, target_host: str, evidence: str, proposed_objective: str
         ) -> dict[str, Any]:
@@ -179,3 +174,15 @@ class BreakglassProvider:
                     "approve it out-of-band before anyone opens a privileged session."
                 ),
             }
+
+        return [
+            ToolSpec(
+                tool_id="breakglass.request_break_glass",
+                tool_class=ToolClass.READ,
+                summary="File a break-glass escalation request. Cannot grant any access by itself.",
+                fn=request_break_glass,
+            )
+        ]
+
+    def register(self, mcp: Any, policy: PolicyEngine, config: dict[str, Any]) -> None:
+        mcp_bind(mcp, policy, self.tool_specs(config))

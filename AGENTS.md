@@ -149,10 +149,29 @@ infrastructure:
 - Async approval-queue backend for MUTATE tools with no live human in the loop at all
   (`ApprovalBackend` in `approval/__init__.py` is already shaped to allow this without touching
   provider code)
+- **A2A (Agent2Agent) interface** for the Argus Agent — planned, not yet designed. AG-UI
+  (`agent/api/`) is the user/frontend-facing surface; A2A would be a separate, agent-to-agent
+  facing surface for other agents to call into Argus Agent. Distinct from the "ACP adapter"
+  the original MVP scope explicitly excluded (a different protocol) and from Argus MCP (which
+  is Argus's own outbound interface *to* external systems, not an inbound one for other agents).
 
 Explicitly **out of scope, not a gap**: nothing about the Notion "Digital Home" inventory belongs
 in this repo — that's context the operating agent reaches through its own separate Notion
 connection.
+
+## Considered later, not adopted now
+
+- **NVIDIA OpenShell** (github.com/NVIDIA/OpenShell, Apache 2.0, alpha as of 2026-09) — a
+  Rust-based sandboxed runtime for autonomous agents: per-agent containers/microVMs plus a
+  declarative-YAML policy engine over filesystem/network/process access, framework-agnostic,
+  explicitly lists Claude Code as a supported provider. Two places it could plug into Argus if
+  revisited: (1) hardening break-glass by running the launched `claude remote-control` session
+  inside an OpenShell sandbox instead of/alongside the current forced-command-SSH-key approach;
+  (2) sandboxing a future agent-side code-execution capability (e.g. deepagents'
+  `FilesystemMiddleware` `execute` tool, currently planned to be excluded). Not pulled in now —
+  the existing SSH forced-command key + `PolicyEngine` already give a reasonable v1 boundary,
+  and adding a new Rust sandboxing runtime cuts against the project's explicit "stay small"
+  constraint until one of the two use cases above is actually needed.
 
 ## Config / secrets reference
 

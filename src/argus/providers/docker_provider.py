@@ -14,6 +14,7 @@ from docker.errors import NotFound
 from fastmcp import Context
 
 from argus.policy import PolicyEngine, ToolClass
+from argus.providers.base import ToolSpec, mcp_bind
 
 
 class DockerProvider:
@@ -35,15 +36,9 @@ class DockerProvider:
                 f"Container '{name}' is not in this deployment's allowed_containers list."
             )
 
-    def register(self, mcp: Any, policy: PolicyEngine, config: dict[str, Any]) -> None:
+    def tool_specs(self, config: dict[str, Any]) -> list[ToolSpec]:
         client = self._get_client
 
-        @policy.register(
-            mcp,
-            tool_id="docker.list_containers",
-            tool_class=ToolClass.READ,
-            summary="List containers visible to this deployment.",
-        )
         async def list_containers() -> list[dict[str, Any]]:
             """List containers this Argus deployment is allowed to see, with their state."""
             containers = client().containers.list(all=True)
@@ -53,54 +48,66 @@ class DockerProvider:
                 if self._allowed is None or c.name in self._allowed
             ]
 
-        @policy.register(
-            mcp,
-            tool_id="docker.get_container_status",
-            tool_class=ToolClass.READ,
-            summary="Get one container's status.",
-        )
         async def get_container_status(name: str) -> dict[str, Any]:
             """Get the current status of a single container by name."""
             self._check_allowed(name)
             container = _get_container_or_raise(client(), name)
             return {"name": container.name, "status": container.status, "image": _image_tag(container)}
 
-        @policy.register(
-            mcp,
-            tool_id="docker.get_container_logs",
-            tool_class=ToolClass.READ,
-            summary="Read recent log lines from a container.",
-        )
         async def get_container_logs(name: str, tail: int = 200) -> str:
             """Return the last `tail` lines of a container's logs."""
             self._check_allowed(name)
             container = _get_container_or_raise(client(), name)
             return container.logs(tail=tail).decode("utf-8", errors="replace")
 
-        @policy.register(
-            mcp,
-            tool_id="docker.inspect_container",
-            tool_class=ToolClass.READ,
-            summary="Get a container's full inspect output.",
-        )
         async def inspect_container(name: str) -> dict[str, Any]:
             """Return the raw `docker inspect` attributes for a container."""
             self._check_allowed(name)
             container = _get_container_or_raise(client(), name)
             return container.attrs
 
-        @policy.register(
-            mcp,
-            tool_id="docker.restart_container",
-            tool_class=ToolClass.MUTATE,
-            summary="Restart a running container.",
-        )
         async def restart_container(name: str, ctx: Context) -> str:
             """Restart a container by name. Requires operator approval."""
             self._check_allowed(name)
             container = _get_container_or_raise(client(), name)
             container.restart(timeout=30)
             return f"Restarted '{name}'."
+
+        return [
+            ToolSpec(
+                tool_id="docker.list_containers",
+                tool_class=ToolClass.READ,
+                summary="List containers visible to this deployment.",
+                fn=list_containers,
+            ),
+            ToolSpec(
+                tool_id="docker.get_container_status",
+                tool_class=ToolClass.READ,
+                summary="Get one container's status.",
+                fn=get_container_status,
+            ),
+            ToolSpec(
+                tool_id="docker.get_container_logs",
+                tool_class=ToolClass.READ,
+                summary="Read recent log lines from a container.",
+                fn=get_container_logs,
+            ),
+            ToolSpec(
+                tool_id="docker.inspect_container",
+                tool_class=ToolClass.READ,
+                summary="Get a container's full inspect output.",
+                fn=inspect_container,
+            ),
+            ToolSpec(
+                tool_id="docker.restart_container",
+                tool_class=ToolClass.MUTATE,
+                summary="Restart a running container.",
+                fn=restart_container,
+            ),
+        ]
+
+    def register(self, mcp: Any, policy: PolicyEngine, config: dict[str, Any]) -> None:
+        mcp_bind(mcp, policy, self.tool_specs(config))
 
 
 def _get_container_or_raise(client: docker.DockerClient, name: str) -> Any:

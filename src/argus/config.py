@@ -38,9 +38,32 @@ class PolicyConfig(BaseModel):
     overrides: dict[str, PolicyDecision] = {}
 
 
+class OtelConfig(BaseModel):
+    """Tracing must never be on the correctness path — see `argus.agent.tracing`."""
+
+    enabled: bool = False
+    endpoint: str = "http://localhost:4317"
+    project_name: str = "argus-agent"
+
+
+class AgentConfig(BaseModel):
+    """Settings for the LangGraph-based interactive agent harness (`argus agent serve`)."""
+
+    workspace_root: str = "/var/lib/argus/agent-workspace"
+    database_url: str = "postgresql://argus:argus@localhost:5432/argus"
+    # Model access goes through OpenRouter (one key routes to any upstream model).
+    # `model` is OpenRouter's `<provider>/<model>` id; `api_key` should be set via
+    # `${OPENROUTER_API_KEY}` in the YAML config, never hardcoded.
+    model: str = "anthropic/claude-sonnet-4.5"
+    model_base_url: str = "https://openrouter.ai/api/v1"
+    api_key: str = ""
+    otel: OtelConfig = OtelConfig()
+
+
 class ArgusConfig(BaseModel):
     providers: dict[str, ProviderEntry] = {}
     policy: PolicyConfig = PolicyConfig()
+    agent: AgentConfig = AgentConfig()
 
 
 def load_config(path: str | Path) -> ArgusConfig:
