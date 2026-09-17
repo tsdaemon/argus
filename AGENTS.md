@@ -72,9 +72,11 @@ LangChain tool names replace dots with underscores (`docker_restart_container`).
   Defaults are READ → allow, MUTATE → require approval, DESTRUCTIVE → deny; configuration
   can override these. DENY removes a tool from either binding's tool list entirely.
 - **Agent approval** uses deepagents/LangChain `HumanInTheLoopMiddleware`, configured through
-  `interrupt_on` by `langchain_bind`. It permits approve/reject decisions. LangGraph
-  interrupts are mapped by `ag-ui-langgraph` to native AG-UI interrupt events. The agent's
-  policy instance needs no `ApprovalBackend` because it only calls `.decide()`.
+  `interrupt_on` by `langchain_bind`. It permits approve/reject decisions. `agent/api.py`
+  exposes pending interrupts in the native AG-UI `RUN_FINISHED.outcome` and translates
+  `resume[]` responses into LangGraph decisions keyed by interrupt ID. Validate responses
+  before checkpointing them; cancellation rejects the pending actions. The agent's policy
+  instance needs no `ApprovalBackend` because it only calls `.decide()`.
 - **MCP approval** awaits real `ctx.elicit()` inside the policy gate before calling the
   implementation. It is not an advisory tool the model can skip. `ElicitApproval` refuses
   declined/cancelled requests and catches `ToolError` to fail closed.

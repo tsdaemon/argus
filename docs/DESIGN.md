@@ -110,8 +110,9 @@ Provided by `deepagents` (`create_deep_agent`), not hand-rolled:
 
 - `FilesystemBackend` + a restricted `FilesystemMiddleware` (`tools=["ls", "read_file",
   "write_file", "edit_file", "delete", "glob", "grep"]`, deliberately excluding `execute`
-  — no arbitrary shell — and no `task`/subagent delegation, disabled via a registered
-  `HarnessProfile`) rooted at `AgentConfig.workspace_root`.
+  — no arbitrary shell) rooted at `AgentConfig.workspace_root`. The default general-purpose
+  subagent is disabled via `HarnessProfile`; `task` delegates to the fixed worker described
+  under Model access.
 - `SkillsMiddleware` (`skills=["skills"]`, relative to the workspace root) — progressive
   disclosure: name/description at startup, full `SKILL.md` on activation via `read_file`.
   Skill install/edit is just `write_file`/`edit_file` under `skills/<name>/SKILL.md` — no
@@ -173,10 +174,40 @@ registered, so `task` exists but only ever delegates to that one subagent.
 - MCP path: `ElicitApproval`, real MCP elicitation, fails closed on protocol mismatch.
 - Agent path: LangGraph's own `interrupt()`, via deepagents'/LangChain's
   `HumanInTheLoopMiddleware` (`interrupt_on={tool_name: InterruptOnConfig(...)}`).
-  Interrupts propagate to AG-UI automatically as a native `Interrupt` wire event
-  (`ag_ui_langgraph.interrupts.lg_interrupt_to_agui`) — no custom protocol needed. The raw
-  interrupt payload (`action_requests`/`review_configs`) is preserved in
-  `metadata.langgraph.raw` for the frontend to render richly.
+  `argus.agent.api.ArgusAgent` enables the native AG-UI interrupt outcome and disables the
+  legacy `on_interrupt` custom event. The paused run ends with
+  `RUN_FINISHED.outcome = {"type": "interrupt", "interrupts": [...]}`. Each interrupt has
+  an ID and preserves the HITL `action_requests`/`review_configs` in
+  `metadata.langgraph.raw` for the frontend to render.
+
+To answer, POST another `RunAgentInput` to `/agent` using the same `threadId`, a new
+`runId`, and the standard `resume` array. For example, the approval portion is:
+
+```json
+{
+  "resume": [{
+    "interruptId": "<id from the interrupt outcome>",
+    "status": "resolved",
+    "payload": {"decisions": [{"type": "approve"}]}
+  }]
+}
+```
+
+Supply one `approve` or `reject` decision for each action in that interrupt, in the
+displayed order. Multiple interrupts (including parallel workers) are matched by ID,
+independently of response order. `status: "cancelled"` rejects every action in the
+specified interrupt, ignoring any attached payload. A request without a resume response
+re-emits the pending interrupt without executing the operation.
+
+The adapter validates interrupt IDs and decisions before constructing LangGraph's
+`Command(resume={interrupt_id: {"decisions": [...]}})`. Stale/duplicate IDs and malformed
+decisions produce a native `RUN_ERROR` with code `INVALID_APPROVAL`; the pending
+checkpoint remains available for a corrected response. Legacy
+`forwardedProps.command` input is rejected so it cannot bypass ID validation.
+
+These HTTP/graph semantics are covered by `tests/api/test_approvals.py`, including a
+listening Uvicorn server. Models and Docker are faked in those checks; real OpenRouter
+and target-host operations remain separate integration work.
 
 `docker.restart_container` is the one MUTATE tool exercising this end-to-end for the MVP.
 
@@ -237,7 +268,7 @@ Three real interfaces, all committed for v0, each with a distinct caller:
   Agent. Backend: `/agent` (see [API / deployment shape](#api--deployment-shape)).
   Frontend: a **React app** (not yet built — `frontend/`, see the ledger) using
   `@ag-ui/client` to start/continue runs, stream agent/tool activity, and render the
-  HITL approve/reject flow from the native `Interrupt` wire event (see
+  HITL approve/reject flow from the native interrupt outcome (see
   [Permissions/HITL](#permissionshitl)).
 - **MCP** (`/mcp`) — the interface for existing MCP clients (Hermes, Claude Code) to
   call the same provider tools (`docker.*`) Argus Agent itself uses, bound via the

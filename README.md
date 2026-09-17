@@ -181,7 +181,9 @@ A tool classified `MUTATE` is gated the same way — `PolicyEngine.decide()` —
 interface it's reached through, but the actual human round-trip differs by interface:
 
 - **Through the agent** (`/agent`): LangGraph's own `interrupt()`, surfaced to the React
-  frontend as a native AG-UI `Interrupt` event. Approve/reject in the UI resumes the graph.
+  frontend in the native AG-UI `RUN_FINISHED` interrupt outcome. The frontend answers
+  through `resume[]`, matching each approval to its interrupt ID. Cancellation rejects
+  the pending actions. See the [approval contract](docs/DESIGN.md#permissionshitl).
 - **Through `/mcp`**: [FastMCP](https://gofastmcp.com)'s real elicitation primitive
   (`ctx.elicit()`) — a blocking round-trip to the connected MCP client, awaited *inside the tool
   handler itself* before it does anything. The model cannot skip this the way it could skip an

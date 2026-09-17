@@ -23,10 +23,10 @@ Legend: `[x]` done and verified · `[~]` done but unverified/partial · `[ ]` no
       progressive disclosure by explicit decision; seam left for Mem0/vector later.
 - `[x]` Skills as a native harness concept (list/discover, read, install, edit) — via
       `deepagents`' `SkillsMiddleware` + generic `write_file`/`edit_file`.
-- `[~]` Deterministic permission metadata + one real HITL approval flow —
-      `docker.restart_container` via `interrupt_on`, verified structurally
-      (`tests/agent/test_tools.py`, `test_graph.py`); not yet exercised through a live
-      AG-UI round-trip.
+- `[x]` Deterministic permission metadata + a backend HITL approval flow —
+      `docker.restart_container` pauses and resumes through `/agent`, including a real
+      loopback Uvicorn server (`tests/api/test_approvals.py`). Models and Docker SDK calls
+      are faked; a real OpenRouter/frontend/host round-trip remains unverified.
 - `[x]` PostgreSQL persists checkpoints — verified live. Raw history/tool-calls/approvals:
       schema + repo functions exist and are tested; **not yet wired into a live run**.
 - `[x]` Explicit Markdown memory loadable/modifiable by the agent itself, including
@@ -61,9 +61,6 @@ evaluation.
 - `[ ]` **React frontend**. Backend AG-UI endpoint is live and tested; no UI consumes it
   yet. Includes the break-glass "launch" action, which is a design decision already
   made (link to the existing `/launch` page, not a new API) but not yet built.
-- `[ ]` **Live HITL round-trip**: `interrupt_on` wiring is verified structurally
-  (`tests/agent/test_tools.py`, `test_graph.py`), but no test has actually driven a full
-  `interrupt()` → AG-UI event → resume round-trip through the real `/agent` endpoint.
 - `[ ]` A2A interface — **in v0 scope** (see design doc's new Interfaces section), not
   yet designed. Worth checking LangChain's own
   [Agent Protocol](https://github.com/langchain-ai/agent-protocol) (`runs`/`threads`/
@@ -86,9 +83,10 @@ No CI workflow is committed; pytest and ruff are the intended baseline.
 
 ## Known open risks / things to re-verify before calling v0 done
 
-- `ag-ui-langgraph` is an early (`0.0.x`) package. The interrupt-to-AG-UI mapping was
-  verified by reading its source, not by driving a real interrupt through the live
-  `/agent` endpoint end-to-end with a real model. Do that before relying on it.
+- The approval path now has HTTP/graph integration coverage with deterministic models
+  and a mocked Docker SDK, including worker delegation and parallel interrupts. A real
+  model and the future React UI still need to exercise that same path. The adapter's
+  resume hook is an upstream integration point; retain these checks when upgrading it.
 - No real `OPENROUTER_API_KEY` has been used against a live model anywhere in this
   work — all graph/API tests use fake chat models. The actual OpenRouter integration
   (auth, rate limits, real tool-calling behavior) is unverified against the real
@@ -371,3 +369,29 @@ action. No protocol compatibility claim was newly verified during this documenta
 - Tool-policy/interrupt metadata, workspace tools, model configuration, and worker
   registration have unit/structural coverage. Docker SDK clients and launcher subprocesses
   are mocked; real-service gaps remain listed above.
+
+### Native AG-UI approval and resume integration
+
+`[x]` Drove the complete pause → HTTP interrupt outcome → approve/reject → resume path
+through `/agent`. This exposed three gaps in the default AG-UI adapter: structured
+interrupt outcomes were disabled, a single response discarded its interrupt ID, and
+cancellation/multiple responses used sentinels that LangChain HITL could not consume.
+
+`argus.agent.api.ArgusAgent` now enables the native `RUN_FINISHED` interrupt outcome and
+translates `resume[]` into LangGraph's ID-keyed resume map. Cancellation rejects all
+actions in that interrupt. Validation happens before checkpoint writes: stale/duplicate
+IDs, malformed decisions, and legacy command input return `INVALID_APPROVAL` without
+consuming the pending action. The frontend contract is documented in `DESIGN.md`.
+
+`tests/api/test_approvals.py` adds 18 integration cases covering planner and worker
+approvals, optional MCP mounting, reconnecting while paused, replaying a consumed answer,
+invalid-response recovery, cancellation, mixed batch decisions, and parallel workers.
+One case runs a listening Uvicorn server over loopback TCP with MCP mounted and a worker
+performing the approved call. The real graph, policy, provider implementation, HTTP
+adapter, and SSE encoding run; the models and Docker SDK are faked, and these approval
+tests use an in-memory checkpointer.
+
+Validation: **128 passed, no skips** in the full pytest suite, including the existing
+real-Postgres persistence/repository checks; ruff and `git diff --check` passed. Upstream
+deprecation warnings remain. No OpenRouter key was configured, and no actual Docker
+restart or real-model/frontend approval flow was exercised.
