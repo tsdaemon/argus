@@ -53,8 +53,11 @@ class AgentConfig(BaseModel):
     database_url: str = "postgresql://argus:argus@localhost:5432/argus"
     # Model access goes through OpenRouter (one key routes to any upstream model).
     # `model` is OpenRouter's `<provider>/<model>` id; `api_key` should be set via
-    # `${OPENROUTER_API_KEY}` in the YAML config, never hardcoded.
+    # `${OPENROUTER_API_KEY}` in the YAML config, never hardcoded. `worker_model` is a
+    # cheaper model for the "worker" subagent's routine/menial tool-calling delegation
+    # — see `argus.agent.graph` — kept separate from `model` (planning/self-reflection).
     model: str = "anthropic/claude-sonnet-4.5"
+    worker_model: str = "anthropic/claude-haiku-4.5"
     model_base_url: str = "https://openrouter.ai/api/v1"
     api_key: str = ""
     otel: OtelConfig = OtelConfig()

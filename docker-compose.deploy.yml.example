@@ -21,7 +21,7 @@ services:
       traefik.enable: "true"
       traefik.http.routers.argus.rule: "Host(`${APP_HOSTNAME_LOCAL}`)"
       traefik.http.routers.argus.entrypoints: "web_local"
-      traefik.http.services.argus.loadbalancer.server.port: "8420"
+      traefik.http.services.argus.loadbalancer.server.port: "8421"
       # mdi-eye-outline: a built-in Homepage icon slug, not an app-served one — Argus
       # has no icon endpoint of its own, unlike the skill's usual pattern.
       homepage.icon: mdi-eye-outline
@@ -31,7 +31,7 @@ services:
       # with. No token in this URL — /breakglass is its own login (generated admin
       # account, first visit to /login shows the password once).
       homepage.href: "http://${APP_HOSTNAME_LOCAL}/breakglass"
-      homepage.description: NAS/network ops MCP server
+      homepage.description: NAS/network ops agent + MCP server
     # Dev-only host publish isn't needed once Traefik can reach the container
     # directly over the Docker network.
     ports: !reset []

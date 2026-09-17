@@ -18,13 +18,30 @@ tasks:
     cmds:
       - uv run ruff check src tests
 
-  run:
-    desc: Run the MCP server locally over stdio (no network exposure, no token needed).
+  postgres:up:
+    desc: Start just Postgres for local agent dev (needs POSTGRES_PASSWORD in .env).
+    cmds:
+      - docker compose up -d postgres
+
+  migrate:
+    desc: Apply Argus-owned Postgres migrations (threads/runs/messages/tool_calls/approvals).
+    env:
+      ARGUS_AGENT_DATABASE_URL: "postgresql://argus:{{.POSTGRES_PASSWORD}}@localhost:5432/argus"
+    cmds:
+      - uv run alembic upgrade head
+
+  agent:serve:
+    desc: Run Argus Agent locally (needs postgres:up + migrate first, OPENROUTER_API_KEY in .env).
+    cmds:
+      - uv run argus agent serve --config examples/argus.example.yaml
+
+  mcp:run:
+    desc: Run just the MCP server over stdio, no agent (no network exposure, no token needed).
     cmds:
       - uv run argus serve --config examples/argus.example.yaml --transport stdio
 
-  serve:
-    desc: Run the MCP server locally over HTTP (needs ARGUS_MCP_TOKEN in .env).
+  mcp:serve:
+    desc: Run just the MCP server over HTTP, no agent (needs ARGUS_MCP_TOKEN in .env).
     cmds:
       - uv run argus serve --config examples/argus.example.yaml
 
@@ -36,10 +53,10 @@ tasks:
   docker:build:
     desc: Build the Argus image.
     cmds:
-      - docker build -t argus-mcp:local .
+      - docker build -t argus:local .
 
   docker:up:
-    desc: Run Argus via docker compose (needs .env — see .env.example).
+    desc: Run the full Argus stack (agent + Postgres + Phoenix) via docker compose (needs .env — see .env.example).
     cmds:
       - docker compose up -d --build
 
@@ -49,9 +66,9 @@ tasks:
       - docker compose down
 
   docker:logs:
-    desc: Follow the docker compose service's logs.
+    desc: Follow the argus service's logs.
     cmds:
-      - docker compose logs -f
+      - docker compose logs -f argus
 
   # --- theseus deployment (see the homelab-compose-deploy skill / README) -----------
   # Needs docker-compose.deploy.yml (gitignored — copy docker-compose.deploy.yml.example)

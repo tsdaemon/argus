@@ -1,6 +1,5 @@
 """Builds the MCP server: loads config, wires the policy engine and approval backend,
-and registers whichever providers are enabled. This is the one place that knows about
-every provider that exists — adding a new one is a single line in `PROVIDER_REGISTRY`.
+and registers whichever providers are enabled (see `argus.providers.registry`).
 
 Also builds the combined HTTP app: the MCP endpoint and the break-glass web view mounted
 on one Starlette app, so a real deployment is one process/port, not two (see
@@ -19,12 +18,7 @@ from argus.mcp.webapp import add_breakglass_routes
 from argus.policy import PolicyEngine
 from argus.providers.base import Provider
 from argus.providers.breakglass_provider import BreakglassProvider
-from argus.providers.docker_provider import DockerProvider
-
-PROVIDER_REGISTRY: dict[str, type[Provider]] = {
-    "docker": DockerProvider,
-    "breakglass": BreakglassProvider,
-}
+from argus.providers.registry import instantiate_providers
 
 
 def build_server(
@@ -34,28 +28,16 @@ def build_server(
     by config name), so callers can reach into e.g. the breakglass provider's store
     without re-reading the config or re-instantiating anything."""
     mcp: FastMCP = FastMCP("argus", auth=auth)
-    approval = ElicitApproval()
     policy = PolicyEngine(
-        approval,
+        ElicitApproval(),
         default_mutate=config.policy.default_mutate,
         default_destructive=config.policy.default_destructive,
         overrides=config.policy.overrides,
     )
 
-    providers: dict[str, Provider] = {}
-    for provider_name, entry in config.providers.items():
-        if not entry.enabled:
-            continue
-        provider_cls = PROVIDER_REGISTRY.get(provider_name)
-        if provider_cls is None:
-            raise ValueError(
-                f"Unknown provider '{provider_name}' in config. "
-                f"Known providers: {sorted(PROVIDER_REGISTRY)}"
-            )
-        settings = entry.settings()
-        provider = provider_cls(settings)
-        provider.register(mcp, policy, settings)
-        providers[provider_name] = provider
+    providers = instantiate_providers(config)
+    for provider_name, provider in providers.items():
+        provider.register(mcp, policy, config.providers[provider_name].settings())
 
     return mcp, providers
 

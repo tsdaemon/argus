@@ -1,11 +1,12 @@
 """Builds the Argus Agent's LangGraph graph via `deepagents.create_deep_agent()`.
 
-Returns a plain `CompiledStateGraph` — LangGraph itself stays fully visible; `deepagents`
-only supplies the workspace filesystem tools, skills discovery, and `AGENTS.md` memory
-loading. Provider tools (currently `docker`) are bound via `argus.agent.tools`, which
-reuses `PolicyEngine.decide()`. `breakglass` is deliberately never bound here — that's a
-direct human action from the UI, not an agent-invoked tool. Models go through OpenRouter
-via `ChatOpenAI`, regardless of which upstream model is actually selected.
+Returns a plain `CompiledStateGraph` — LangGraph stays fully visible; `deepagents`
+supplies workspace/skills/memory and one fixed "worker" `SubAgent` (cheap
+`config.worker_model`, for routine tool-calling delegation via `task`) alongside the
+main agent (`config.model`, planning/self-reflection). Provider tools are bound via
+`argus.agent.tools` (reuses `PolicyEngine.decide()`); `breakglass` is never bound here —
+that's a human UI action, not an agent tool. Models go through OpenRouter via
+`ChatOpenAI` regardless of upstream model.
 """
 
 from __future__ import annotations
@@ -16,6 +17,7 @@ from typing import Any
 from deepagents import (
     GeneralPurposeSubagentProfile,
     HarnessProfile,
+    SubAgent,
     create_deep_agent,
     register_harness_profile,
 )
@@ -30,8 +32,14 @@ from argus.config import AgentConfig
 from argus.policy import PolicyEngine
 from argus.providers.base import Provider
 
-# Excludes `execute` (arbitrary shell) and `task` (subagent delegation) — out of scope.
+# Excludes `execute` (arbitrary shell) — out of scope.
 _WORKSPACE_TOOLS = ["ls", "read_file", "write_file", "edit_file", "delete", "glob", "grep"]
+
+_WORKER_DESCRIPTION = (
+    "Delegate routine, repetitive, or read-heavy tool-calling work here (e.g. checking "
+    "several containers' status/logs) to save cost. Keep planning, synthesis, and "
+    "deciding whether an action needs approval on the main agent."
+)
 
 _DEFAULT_AGENTS_MD = (
     "# Argus Agent memory\n\n"
@@ -49,8 +57,8 @@ register_harness_profile(
 )
 
 
-def _build_model(config: AgentConfig) -> ChatOpenAI:
-    return ChatOpenAI(model=config.model, base_url=config.model_base_url, api_key=config.api_key)
+def _build_model(config: AgentConfig, model_name: str) -> ChatOpenAI:
+    return ChatOpenAI(model=model_name, base_url=config.model_base_url, api_key=config.api_key)
 
 
 def build_graph(
@@ -61,12 +69,14 @@ def build_graph(
     policy: PolicyEngine,
     checkpointer: BaseCheckpointSaver | None = None,
     model: Any = None,
+    worker_model: Any = None,
 ) -> CompiledStateGraph:
     """Assemble the Argus Agent graph.
 
     `providers` is every *shared* provider to bind tools from — the caller decides which
-    (never `breakglass`). `provider_settings` is keyed the same way. `model` overrides
-    the OpenRouter model `config` would otherwise build, for tests.
+    (never `breakglass`). `provider_settings` is keyed the same way. `model`/
+    `worker_model` override the OpenRouter models `config` would otherwise build, for
+    tests.
     """
     workspace_root = Path(config.workspace_root)
     workspace_root.mkdir(parents=True, exist_ok=True)
@@ -88,13 +98,20 @@ def build_graph(
     backend = FilesystemBackend(root_dir=workspace_root)
     filesystem_middleware = FilesystemMiddleware(backend=backend, tools=_WORKSPACE_TOOLS)
 
+    worker = SubAgent(
+        name="worker",
+        description=_WORKER_DESCRIPTION,
+        model=worker_model or _build_model(config, config.worker_model),
+    )
+
     return create_deep_agent(
-        model=model or _build_model(config),
+        model=model or _build_model(config, config.model),
         tools=tools,
         backend=backend,
         middleware=[filesystem_middleware],
         skills=["skills"],
         memory=["AGENTS.md"],
+        subagents=[worker],
         interrupt_on=interrupt_on or None,
         checkpointer=checkpointer,
     )

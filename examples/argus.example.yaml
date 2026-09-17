@@ -45,6 +45,23 @@ providers:
     #   permission_mode: acceptEdits   # manual | acceptEdits | dontAsk | auto
     #   ttl_seconds: 14400              # kills the session after 4h regardless; optional
 
+# --- Agent: the LangGraph-based interactive harness (`argus agent serve`) ---------
+# Separate from the providers/policy above, which describe what the MCP server exposes
+# to external clients — the agent binds the same provider tools directly, in-process.
+agent:
+  # Directory the agent's Markdown memory (AGENTS.md, notes, skills) lives in.
+  workspace_root: /var/lib/argus/agent-workspace
+  # Postgres connection string for checkpoints, history, tool calls, and approvals.
+  database_url: ${ARGUS_AGENT_DATABASE_URL}
+  # Model access goes through OpenRouter — one API key routes to any upstream model, so
+  # switching models is just this line, not a code change. See https://openrouter.ai/models
+  # for the full `<provider>/<model>` id catalog.
+  model: anthropic/claude-sonnet-4.5
+  api_key: ${OPENROUTER_API_KEY}
+  otel:
+    enabled: false
+    endpoint: http://phoenix:4317
+
 # --- Policy: the actual security boundary ------------------------------------------
 policy:
   # What happens to a MUTATE tool with no explicit override below.

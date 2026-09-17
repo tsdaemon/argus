@@ -42,6 +42,7 @@ def build(tmp_path: Path, **policy_kwargs):
         policy=policy,
         checkpointer=InMemorySaver(),
         model=fake_model(),
+        worker_model=fake_model(),
     )
     return graph, config
 
@@ -50,7 +51,7 @@ def bound_tool_names(graph) -> set[str]:
     return set(graph.nodes["tools"].bound.tools_by_name.keys())
 
 
-def test_graph_binds_workspace_tools_without_execute_or_task(tmp_path: Path):
+def test_graph_binds_workspace_tools_without_execute(tmp_path: Path):
     graph, _config = build(tmp_path)
 
     names = bound_tool_names(graph)
@@ -58,7 +59,14 @@ def test_graph_binds_workspace_tools_without_execute_or_task(tmp_path: Path):
     for expected in ["ls", "read_file", "write_file", "edit_file", "delete", "glob", "grep"]:
         assert expected in names
     assert "execute" not in names
-    assert "task" not in names
+
+
+def test_graph_binds_task_tool_for_the_worker_subagent(tmp_path: Path):
+    """`task` should exist for delegating to the one fixed "worker" subagent, even
+    though deepagents' own default general-purpose subagent stays disabled."""
+    graph, _config = build(tmp_path)
+
+    assert "task" in bound_tool_names(graph)
 
 
 def test_graph_binds_provider_tools(tmp_path: Path):
@@ -105,7 +113,7 @@ def test_creates_skills_directory(tmp_path: Path):
 def test_build_model_points_at_openrouter():
     config = AgentConfig(model="anthropic/claude-sonnet-4.5", api_key="sk-or-fake")
 
-    model = _build_model(config)
+    model = _build_model(config, config.model)
 
     assert isinstance(model, ChatOpenAI)
     assert model.model_name == "anthropic/claude-sonnet-4.5"
@@ -116,6 +124,22 @@ def test_build_model_resolves_as_openai_provider():
     """Guards the assumption graph.py's harness-profile key ("openai") relies on."""
     config = AgentConfig(model="google/gemini-3-pro", api_key="sk-or-fake")
 
-    model = _build_model(config)
+    model = _build_model(config, config.model)
 
     assert get_model_provider(model) == "openai"
+
+
+def test_planner_and_worker_use_different_models():
+    """The main agent and the worker subagent are meant to use different models
+    (expensive planner vs. cheap worker) — locks in that `config.model` and
+    `config.worker_model` are wired to separate `_build_model` calls, not the same one."""
+    config = AgentConfig(
+        model="anthropic/claude-sonnet-4.5",
+        worker_model="anthropic/claude-haiku-4.5",
+        api_key="sk-or-fake",
+    )
+
+    planner = _build_model(config, config.model)
+    worker = _build_model(config, config.worker_model)
+
+    assert planner.model_name != worker.model_name

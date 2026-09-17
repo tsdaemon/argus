@@ -1,7 +1,7 @@
 """The extension point: what a pluggable Argus backend looks like.
 
 Adding a new provider means writing a class that satisfies this protocol and adding one
-line to `PROVIDER_REGISTRY` in `argus.mcp.server` — no other changes needed.
+line to `PROVIDER_REGISTRY` in `argus.providers.registry` — no other changes needed.
 
 `tool_specs()` is the transport-agnostic source of truth for a provider's tools.
 `register()` is the MCP-facing entry point (`mcp_bind(mcp, policy, self.tool_specs(config))`

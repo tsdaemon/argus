@@ -5,8 +5,7 @@ RUN pip install --no-cache-dir uv
 WORKDIR /app
 COPY pyproject.toml uv.lock README.md ./
 COPY src ./src
-# --frozen: build fails rather than silently drifting from the committed lockfile.
-# No --extra dev: test/lint tooling has no business in the runtime image.
+# --frozen: build fails rather than drifting from the lockfile. No --extra dev.
 RUN uv sync --frozen
 
 FROM python:3.12-slim
@@ -19,12 +18,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends openssh-client 
 WORKDIR /app
 COPY --from=builder /app/.venv /app/.venv
 COPY src ./src
+COPY alembic.ini ./
 ENV PATH="/app/.venv/bin:$PATH"
 
 # Runs as root by default: the docker provider needs to reach a socket mounted in
 # from the host, and container root is not host root. If you don't need the docker
 # provider, drop the socket mount and run as a non-root user instead.
 
-EXPOSE 8420
+EXPOSE 8421
 ENTRYPOINT ["argus"]
-CMD ["serve", "--config", "/config/argus.yaml", "--host", "0.0.0.0", "--port", "8420"]
+CMD ["agent", "serve", "--config", "/config/argus.yaml", "--host", "0.0.0.0", "--port", "8421"]

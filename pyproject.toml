@@ -3,18 +3,33 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "argus-mcp"
+name = "argus"
 version = "0.1.0"
-description = "Pluggable, policy-gated MCP server for operating home infrastructure without handing an agent raw shell access."
+description = "Self-hosted LangGraph agent harness for home infrastructure, plus the policy-gated MCP server it's built on — no raw shell access handed to either."
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.11"
 authors = [{ name = "Anatolii Stehnii", email = "tsdaemon@gmail.com" }]
 dependencies = [
+    "ag-ui-langgraph>=0.0.45",
+    "ag-ui-protocol>=0.1.22",
+    "alembic>=1.20.0",
+    "arize-phoenix-otel>=0.17.1",
+    "click>=8.5.0",
+    "deepagents>=0.7.14",
+    "docker>=7",
+    "fastapi>=0.141.1",
     "fastmcp>=2.0",
+    "langchain-core>=1.6.3",
+    "langchain-openai>=1.6.2",
+    "langgraph>=1.2.11",
+    "langgraph-checkpoint-postgres>=3.1.2",
+    "openinference-instrumentation-langchain>=0.1.76",
+    "opentelemetry-exporter-otlp>=1.44.0",
+    "opentelemetry-sdk>=1.44.0",
+    "psycopg[binary]>=3.3.5",
     "pydantic>=2",
     "pyyaml>=6",
-    "docker>=7",
     "starlette>=0.37",
     "uvicorn>=0.30",
 ]
@@ -30,27 +45,11 @@ argus-breakglass-launch = "argus.host_launch:main"
 
 [project.optional-dependencies]
 dev = [
+    "httpx>=0.27",
     "pytest>=8",
     "pytest-asyncio>=0.24",
     "pytest-mock>=3",
     "ruff>=0.6",
-    "httpx>=0.27",
-]
-agent = [
-    "ag-ui-langgraph>=0.0.45",
-    "ag-ui-protocol>=0.1.22",
-    "arize-phoenix-otel>=0.17.1",
-    "deepagents>=0.7.14",
-    "fastapi>=0.141.1",
-    "langchain-anthropic>=1.7.2",
-    "langchain-core>=1.6.3",
-    "langchain-openai>=1.6.2",
-    "langgraph>=1.2.11",
-    "langgraph-checkpoint-postgres>=3.1.2",
-    "openinference-instrumentation-langchain>=0.1.76",
-    "opentelemetry-exporter-otlp>=1.44.0",
-    "opentelemetry-sdk>=1.44.0",
-    "psycopg[binary]>=3.3.5",
 ]
 
 [tool.hatch.build.targets.wheel]

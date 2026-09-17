@@ -4,6 +4,12 @@ Handover notes for whoever (human or agent) picks this project up next. The READ
 user-facing pitch; this file is the "why," what's actually been verified vs. only unit-tested,
 and what's still open. Read both.
 
+**[`docs/DESIGN.md`](docs/DESIGN.md)** is the authoritative design/requirements doc for the
+whole Argus system (not scoped to one task or PR) — architecture, trust boundaries, and what's
+explicitly out of scope. **[`docs/argus-agent-v0.md`](docs/argus-agent-v0.md)** is the execution
+ledger tracking progress against it, including reversals. Read `DESIGN.md` before making an
+architectural change; update the ledger as work against it lands.
+
 ## Status as of 2026-09-15
 
 Fully built, 70 tests passing, ruff clean, pushed to `github.com:tsdaemon/argus` (2 commits:
@@ -46,13 +52,16 @@ optional path to actually spin up a privileged Claude Code session on a real hos
 | SSH-based host session launcher (Argus side, shared) | `src/argus/launcher/ssh.py` |
 | Forced-command host script (deployed separately, on the target host) | `src/argus/host_launch.py` |
 
-`src/argus/mcp/` holds everything specific to the standalone MCP server surface (FastMCP
-server assembly, `/mcp` auth, the break-glass web view). Everything else at the top level of
-`src/argus/` (`policy.py`, `config.py`, `webauth.py`, `providers/`, `approval/` protocol,
-`launcher/`, `notify/`, `host_launch.py`) is shared and transport-agnostic — an in-process
-LangGraph agent harness (planned, not yet built) is meant to bind the same `providers/` tool
-implementations directly, without going through `/mcp` at all. `mcp/` and any future agent
-package should only ever depend on the shared top level, never on each other.
+`src/argus/mcp/` holds the FastMCP surface (server assembly, `/mcp` auth, the break-glass
+web view). Everything else at the top level of `src/argus/` (`policy.py`, `config.py`,
+`webauth.py`, `providers/`, `approval/` protocol, `launcher/`, `notify/`,
+`host_launch.py`) is shared and transport-agnostic. `src/argus/agent/` — the LangGraph
+harness, see [`docs/DESIGN.md`](docs/DESIGN.md) — binds the same
+`providers/` tool implementations directly in-process, without going through `/mcp`.
+Argus Agent is the process that always runs (`argus agent serve`); `/mcp` is an optional
+interface of that same process (on if `ARGUS_MCP_TOKEN` is set), not a separate
+deployment. `mcp/` and `agent/` only ever depend on the shared top level, never on each
+other.
 
 Extension point: a provider is a class with `name` + `register(mcp, policy, config)`, registered
 in `PROVIDER_REGISTRY` in `server.py`. Use `policy.register(...)` instead of `@mcp.tool`
@@ -149,15 +158,18 @@ infrastructure:
 - Async approval-queue backend for MUTATE tools with no live human in the loop at all
   (`ApprovalBackend` in `approval/__init__.py` is already shaped to allow this without touching
   provider code)
-- **A2A (Agent2Agent) interface** for the Argus Agent — planned, not yet designed. AG-UI
-  (`agent/api/`) is the user/frontend-facing surface; A2A would be a separate, agent-to-agent
-  facing surface for other agents to call into Argus Agent. Distinct from the "ACP adapter"
-  the original MVP scope explicitly excluded (a different protocol) and from Argus MCP (which
-  is Argus's own outbound interface *to* external systems, not an inbound one for other agents).
+- **A2A (Agent2Agent) interface** for the Argus Agent — in v0 scope, not yet designed. See
+  [`docs/DESIGN.md`](docs/DESIGN.md#interfaces) for how it's meant to relate to AG-UI
+  (`src/argus/api/`) and Argus MCP.
 
-Explicitly **out of scope, not a gap**: nothing about the Notion "Digital Home" inventory belongs
-in this repo — that's context the operating agent reaches through its own separate Notion
-connection.
+**Updated 2026-09-18**: the Notion "Digital Home" inventory used to be out of scope on the
+premise that "the operating agent reaches it through its own separate Notion connection" —
+meaning some *external* client (Hermes, Claude Code). Now that Argus Agent itself is that
+operating agent, it needs this directly — but as a **native, agent-only knowledge source**
+(read-only, grouped with the agent's own memory/workspace), not a `Provider`/`ToolSpec` and
+never exposed over `/mcp`: no mutation risk to gate, and no reason an external MCP client
+should read the user's Notion just because it can call `docker.*`. Tracked in
+[`docs/argus-agent-v0.md`](docs/argus-agent-v0.md), not yet designed in detail.
 
 ## Considered later, not adopted now
 

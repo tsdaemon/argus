@@ -2,20 +2,50 @@ services:
   argus:
     build: .
     restart: unless-stopped
+    depends_on:
+      - postgres
+      - phoenix
     ports:
-      - "${APP_PORT:-8420}:8420"
+      # One process, one port: /agent (AG-UI) and, if ARGUS_MCP_TOKEN is set, /mcp +
+      # /breakglass are all served here — see the README.
+      - "${AGENT_PORT:-8421}:8421"
     environment:
-      ARGUS_MCP_TOKEN: ${ARGUS_MCP_TOKEN}
+      ARGUS_MCP_TOKEN: ${ARGUS_MCP_TOKEN:-}
       ARGUS_NTFY_TOPIC_URL: ${ARGUS_NTFY_TOPIC_URL:-}
+      ARGUS_AGENT_DATABASE_URL: postgresql://argus:${POSTGRES_PASSWORD}@postgres:5432/argus
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
     volumes:
       - ${CONFIG_FILE:-./examples/argus.example.yaml}:/config/argus.yaml:ro
       # Named volume, not a host bind mount, for the breakglass sqlite store — matches
       # examples/argus.example.yaml's store_path (/var/lib/argus/...).
       - argus-state:/var/lib/argus
+      - argus-agent-workspace:/var/lib/argus/agent-workspace
       # Lets the docker provider talk to your daemon. Scope what it can see via
       # allowed_containers in the mounted config, not via this mount — a read-only
       # bind here would restrict changes to the socket *file*, not calls sent over it.
       - /var/run/docker.sock:/var/run/docker.sock
 
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: argus
+      POSTGRES_USER: argus
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+    volumes:
+      - argus-pg-data:/var/lib/postgresql/data
+    ports:
+      # localhost-only: lets a non-containerized `uv run argus agent serve` (or
+      # `alembic upgrade head`) reach this same Postgres for local dev.
+      - "127.0.0.1:5432:5432"
+
+  phoenix:
+    image: arizephoenix/phoenix:latest
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:6006:6006"
+
 volumes:
   argus-state:
+  argus-agent-workspace:
+  argus-pg-data:

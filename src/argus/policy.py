@@ -61,12 +61,14 @@ class PolicyEngine:
 
     def __init__(
         self,
-        approval_backend: ApprovalBackend,
+        approval_backend: ApprovalBackend | None = None,
         *,
         default_mutate: PolicyDecision = PolicyDecision.REQUIRE_APPROVAL,
         default_destructive: PolicyDecision = PolicyDecision.DENY,
         overrides: dict[str, PolicyDecision] | None = None,
     ) -> None:
+        # None is valid for a `.decide()`-only engine (e.g. the agent harness, which
+        # gates approval through LangGraph's `interrupt_on` instead of `.register()`).
         self._approval_backend = approval_backend
         self._defaults = {
             ToolClass.READ: PolicyDecision.ALLOW,
@@ -119,10 +121,16 @@ class PolicyEngine:
         return decorator
 
     def _gate(self, fn: F, *, tool_id: str, summary: str) -> F:
+        if self._approval_backend is None:
+            raise RuntimeError(
+                f"'{tool_id}' requires approval but this PolicyEngine has no ApprovalBackend."
+            )
+        approval_backend = self._approval_backend
+
         @functools.wraps(fn)
         async def wrapper(*args: Any, **kwargs: Any) -> Any:
             ctx = _find_context(fn, args, kwargs)
-            approved = await self._approval_backend.request(
+            approved = await approval_backend.request(
                 ctx,
                 action=tool_id,
                 summary=summary,
