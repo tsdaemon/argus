@@ -315,9 +315,10 @@ needed. See [`docs/DESIGN.md`](docs/DESIGN.md#tool-binding-architecture) for the
 uv sync --extra dev
 uv run pytest
 uv run ruff check src tests
+uv run pre-commit install   # once, per clone — runs the same lint + basic hygiene checks on every commit
 ```
 
 Most of the suite runs without a real Postgres or a live MCP/model client — the Docker SDK,
 approval backend, and chat models are mocked/faked throughout. A handful of tests
-(`tests/agent/test_db_repo.py`, `test_checkpointer.py`, one case in `test_api_app.py`) exercise
-a real Postgres and skip gracefully (not fail) if `task postgres:up` hasn't been run.
+(`tests/db/test_repo.py`, `tests/db/test_checkpointer.py`, one case in `tests/api/test_app.py`)
+exercise a real Postgres and skip gracefully (not fail) if `task postgres:up` hasn't been run.

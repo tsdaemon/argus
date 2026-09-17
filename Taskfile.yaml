@@ -18,6 +18,16 @@ tasks:
     cmds:
       - uv run ruff check src tests
 
+  precommit:install:
+    desc: Install the pre-commit git hook (once, per clone).
+    cmds:
+      - uv run pre-commit install
+
+  precommit:run:
+    desc: Run all pre-commit hooks against the whole repo.
+    cmds:
+      - uv run pre-commit run --all-files
+
   postgres:up:
     desc: Start just Postgres for local agent dev (needs POSTGRES_PASSWORD in .env).
     cmds:
