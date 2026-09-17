@@ -1,210 +1,165 @@
 # Agent instructions for Argus
 
-Handover notes for whoever (human or agent) picks this project up next. The README is the
-user-facing pitch; this file is the "why," what's actually been verified vs. only unit-tested,
-and what's still open. Read both.
+Use this file for current working guidance. Read [`README.md`](README.md) for the project
+overview and [`docs/DESIGN.md`](docs/DESIGN.md) for the authoritative architecture,
+requirements, and scope before making architectural changes.
 
-**[`docs/DESIGN.md`](docs/DESIGN.md)** is the authoritative design/requirements doc for the
-whole Argus system (not scoped to one task or PR) — architecture, trust boundaries, and what's
-explicitly out of scope. **[`docs/argus-agent-v0.md`](docs/argus-agent-v0.md)** is the execution
-ledger tracking progress against it, including reversals. Read `DESIGN.md` before making an
-architectural change; update the ledger as work against it lands.
+[`docs/argus-agent-v0.md`](docs/argus-agent-v0.md) tracks current build status and unfinished
+work; its [History section](docs/argus-agent-v0.md#history) holds implementation history,
+reversals, and verification logs. Update that ledger as work lands. Keep dated status,
+test results, and session history out of this file.
 
-## Status as of 2026-09-15
+Argus is a self-hosted LangGraph agent for operating home infrastructure, primarily the
+Theseus NAS, through constrained tools. Keep it small and understandable for one operator.
+Optimize for personal usefulness and learning; preserve useful extension points without
+building generality for its own sake. Reuse maintained components while keeping execution
+and permission boundaries visible.
 
-Fully built, 70 tests passing, ruff clean, pushed to `github.com:tsdaemon/argus` (2 commits:
-"First version", "Logo and readme"). **Not yet deployed anywhere real** — `docker-compose.deploy.yml`
-has never been created (only its `.example` template exists, deliberately gitignored), so nothing
-is running on theseus yet. See [Immediate next steps](#immediate-next-steps).
+## What runs
 
-The project started under an explicit "make this legitimately generic OSS, not theseus-specific"
-constraint, then the operator dropped that framing partway through ("to hell with all this
-generic thing, I am doing it just for myself and just for fun"). The pluggable architecture
-stayed anyway — it was already built and costs nothing extra to keep — but don't over-invest in
-generality for its own sake going forward; optimize for what's actually useful to run this
-personally.
+`argus agent serve` is the primary runtime: one FastAPI process on port **8421** by default.
+It serves `/agent` (AG-UI) and `/agent/health`. When `ARGUS_MCP_TOKEN` is set, it also mounts
+the MCP application at `/mcp`; enabling the `breakglass` provider adds `/breakglass`,
+`/login`, and `/launch` through that same mounted application.
 
-## What this is, in one paragraph
+The agent invokes provider tools directly in-process; it does not call its own MCP server.
+External clients such as Hermes or Claude Code can call the same provider implementations
+over MCP. The planned A2A interface will let another agent call Argus Agent itself.
 
-An MCP server that sits between an agent (Hermes, Claude Code, whatever) and home
-infrastructure, so the agent never gets raw shell/SSH access. Every tool is classified READ
-(free) / MUTATE (needs live approval via MCP elicitation) / DESTRUCTIVE (not registered at all
-by default). A separate, deliberately weaker escape hatch — break-glass — lets an agent flag
-"I can't resolve this, a human needs to look," reviewed and acted on from a phone, with an
-optional path to actually spin up a privileged Claude Code session on a real host afterward.
+The default `Dockerfile` and `docker-compose.yml` package the agent, Postgres, and Phoenix
+as one stack. Phoenix being present does **not** mean tracing is wired. Agent dependencies
+are base dependencies in `pyproject.toml`, not an optional `agent` extra. `argus serve`
+still provides MCP-only HTTP (default port 8420) or stdio for testing/lower-level use.
 
 ## Architecture map
 
 | Concern | File |
 |---|---|
-| Tool classification + enforcement (the actual security boundary), transport-agnostic | `src/argus/policy.py` |
-| Approval `ApprovalBackend` protocol (transport-agnostic) | `src/argus/approval/__init__.py` |
-| Approval via real MCP elicitation, fails closed (MCP-specific) | `src/argus/mcp/elicit.py` |
+| Agent graph, models, workspace middleware, fixed worker | `src/argus/agent/graph.py` |
+| Provider tools bound to LangChain + approval metadata | `src/argus/agent/tools.py` |
+| AG-UI agent wrapper | `src/argus/agent/api.py` |
+| Combined FastAPI app and optional MCP mounting | `src/argus/api/app.py` |
+| Postgres-backed LangGraph checkpoints | `src/argus/db/checkpointer.py` |
+| Argus-owned history repository + Alembic migrations | `src/argus/db/repo.py`, `src/argus/db/migrations/` |
+| Shared tool classification and policy decisions | `src/argus/policy.py` |
+| Transport-independent tool specs + MCP binding | `src/argus/providers/base.py` |
+| Shared provider registry and construction | `src/argus/providers/registry.py` |
+| Approval backend protocol | `src/argus/approval/__init__.py` |
+| MCP elicitation approval, fails closed | `src/argus/mcp/elicit.py` |
 | Config schema + `${ENV_VAR}` expansion | `src/argus/config.py` |
-| `/mcp` bearer auth | `src/argus/mcp/auth.py` |
-| MCP server assembly, provider registry, combined HTTP app | `src/argus/mcp/server.py` |
-| CLI (`argus serve`, `argus breakglass ...`) | `src/argus/cli.py` |
-| Docker provider (list/status/logs/inspect/restart) | `src/argus/providers/docker_provider.py` |
-| Break-glass provider + sqlite store | `src/argus/providers/breakglass_provider.py` |
-| Break-glass web UI (login-gated) | `src/argus/mcp/webapp.py` |
-| Generated-admin-account login + signed sessions (shared, not MCP-specific) | `src/argus/webauth.py` |
+| MCP server/sub-app assembly + bearer auth | `src/argus/mcp/server.py`, `src/argus/mcp/auth.py` |
+| CLI: `argus agent serve`, `argus serve`, `argus breakglass ...` | `src/argus/cli.py` |
+| Docker visibility and restart tools | `src/argus/providers/docker_provider.py` |
+| Break-glass provider + SQLite request store | `src/argus/providers/breakglass_provider.py` |
+| Break-glass web routes + shared admin authentication | `src/argus/mcp/webapp.py`, `src/argus/webauth.py` |
 | ntfy push notifications | `src/argus/notify/` |
-| SSH-based host session launcher (Argus side, shared) | `src/argus/launcher/ssh.py` |
-| Forced-command host script (deployed separately, on the target host) | `src/argus/host_launch.py` |
+| SSH launcher + separately deployed forced-command host script | `src/argus/launcher/ssh.py`, `src/argus/host_launch.py` |
 
-`src/argus/mcp/` holds the FastMCP surface (server assembly, `/mcp` auth, the break-glass
-web view). Everything else at the top level of `src/argus/` (`policy.py`, `config.py`,
-`webauth.py`, `providers/`, `approval/` protocol, `launcher/`, `notify/`,
-`host_launch.py`) is shared and transport-agnostic. `src/argus/agent/` — the LangGraph
-harness, see [`docs/DESIGN.md`](docs/DESIGN.md) — binds the same
-`providers/` tool implementations directly in-process, without going through `/mcp`.
-Argus Agent is the process that always runs (`argus agent serve`); `/mcp` is an optional
-interface of that same process (on if `ARGUS_MCP_TOKEN` is set), not a separate
-deployment. `mcp/` and `agent/` only ever depend on the shared top level, never on each
-other.
+`agent/` builds the agent; `api/` serves it; `db/` owns persistence; `mcp/` exposes provider
+tools to external clients. `api/` composes these packages. `agent/` and `mcp/` share policy,
+providers, and configuration without depending on each other.
 
-Extension point: a provider is a class with `name` + `register(mcp, policy, config)`, registered
-in `PROVIDER_REGISTRY` in `server.py`. Use `policy.register(...)` instead of `@mcp.tool`
-directly — that's what makes classification/gating actually apply. See "Adding a provider" in
-the README.
+To add a provider, implement `name`, `tool_specs(config) -> list[ToolSpec]`, and
+`register(mcp, policy, config)` (normally a call to `mcp_bind`). Register its class in
+`PROVIDER_REGISTRY` in `providers/registry.py`. The agent's `langchain_bind` consumes those
+same specs. Do not bypass policy with direct `@mcp.tool` registration or duplicate tool
+implementations per interface. Canonical policy IDs use dots (`docker.restart_container`);
+LangChain tool names replace dots with underscores (`docker_restart_container`).
 
-## Design decisions and why (the parts worth not re-deriving)
+## Trust boundaries and approval
 
-- **Real elicitation, not FastMCP's `Approval` app provider.** The latter is explicitly
-  documented as advisory-only (a tool the model is *asked* to call and can just skip). MUTATE
-  tools call `ctx.elicit()` synchronously inside the handler, before doing anything — the gate is
-  in Argus's Python, not model cooperation.
-- **A real protocol gap exists and is deliberately not worked around.** MCP's "2026-07-28 era"
-  revision (SEP-2322/2575) removed the server-initiated back-channel `ctx.elicit()` needs,
-  replaced by a two-round-trip `InputRequiredResult` guard pattern. Implementing that pattern
-  was scoped out because it couldn't be verified against a real client from this environment.
-  `ElicitApproval` fails closed (refuses the action) if `ctx.elicit()` raises for this reason —
-  confirm this is still the right tradeoff if/when the connecting client's protocol era changes.
-  Confirmed (via docs research, not a live connection) that Hermes Agent uses the older, stable
-  `elicitation/create` callback, so this was the correct call for the actual target client.
-- **One combined HTTP service, not stdio + a separate web app.** Hermes supports remote MCP
-  servers over HTTP with header-based auth (`url:` + `headers:` in its config) — it doesn't need
-  to spawn Argus as a subprocess. `/mcp` and `/breakglass` are mounted on the same
-  `mcp.http_app()` Starlette app (`server.py::build_http_app`), one process/port. `--transport
-  stdio` still exists for local/dev use.
-- **`/mcp` needs its own auth once it's network-reachable.** Stdio is trusted by construction;
-  HTTP isn't. `StaticTokenVerifier` (`auth.py`) is a static bearer check — deliberately not OAuth,
-  which would be real overhead unjustified for a single-operator homelab.
-- **Break-glass is for *unattended* runs specifically** — a scheduled Hermes check with nobody
-  watching a chat. (A live human would just answer the elicitation prompt directly.) That's why
-  its approval channel can't assume a terminal/SSH session — it has to work from a phone with
-  nothing installed beyond a browser.
-- **No pre-shared breakglass token.** Originally designed with `ARGUS_BREAKGLASS_TOKEN` in the
-  URL; replaced with a self-provisioning admin account (`webauth.py`) — first visit to `/login`
-  generates a password, shows it once, PBKDF2-hashed thereafter, signed session cookie from
-  there on. Nothing secret ever sits in a URL anymore.
-- **Session launch (optional) uses a forced-command SSH key, not the Docker socket.** The docker
-  *provider*'s socket mount is fine (narrow, allowlisted, that's its whole job). Using the same
-  socket as an escalation path for spinning up a privileged session was rejected — it would put
-  host-root-equivalent access inside the same process that's reachable over HTTP by an agent. A
-  forced-command SSH key (`command="..." ` in `authorized_keys`, restricted to exactly one
-  script) keeps the blast radius of a leaked key to that one fixed action.
-- **`permission_mode`/`ttl_seconds` for a launched session come from Argus's own config, never
-  from a break-glass request's fields.** An agent's `request_break_glass` call can influence what
-  a human *reads*, never how the resulting session is launched or scoped.
-- **No streaming UI for launched sessions.** `claude remote-control` is outbound-only and tied to
-  the operator's Claude account — it just shows up in their app once started. Building a
-  browser-terminal (xterm.js + pty bridge) was explicitly rejected as disproportionate: nobody
-  does real debugging by thumb-typing into a phone.
-- **`CONTEXT.md`, not an initial CLI prompt.** No documented way to combine `claude -p` (runs one
-  task, exits) with `--remote-control` (stays alive, needs a live human) — an agent-supplied or
-  human-supplied context file gets written into the session's working directory instead, and the
-  human's first message once connected is effectively "read this."
+- **Operational provider tools** share one `PolicyEngine.decide()` classification path.
+  Defaults are READ → allow, MUTATE → require approval, DESTRUCTIVE → deny; configuration
+  can override these. DENY removes a tool from either binding's tool list entirely.
+- **Agent approval** uses deepagents/LangChain `HumanInTheLoopMiddleware`, configured through
+  `interrupt_on` by `langchain_bind`. It permits approve/reject decisions. LangGraph
+  interrupts are mapped by `ag-ui-langgraph` to native AG-UI interrupt events. The agent's
+  policy instance needs no `ApprovalBackend` because it only calls `.decide()`.
+- **MCP approval** awaits real `ctx.elicit()` inside the policy gate before calling the
+  implementation. It is not an advisory tool the model can skip. `ElicitApproval` refuses
+  declined/cancelled requests and catches `ToolError` to fail closed.
+- **Private workspace and skills** are native agent capabilities, outside operational
+  policy gating and never exposed over MCP. They are the agent's own editable knowledge.
+  Planned read-only Notion access belongs here conceptually: an agent-only knowledge tool,
+  not a `Provider`/`ToolSpec` or a way for external MCP clients to read the user's inventory.
+- **Break-glass** is separate. External MCP clients can file a request, but `breakglass` is
+  excluded when assembling the agent's provider tools. No agent tool approves or launches a
+  privileged session; a human uses the authenticated web routes. The future React UI will
+  link to the existing `/launch` page. Keep target-host sudo password-gated, with no NOPASSWD.
 
-## Verified live vs. only mock/unit-tested
+Authentication is scoped per interface: the static bearer token protects `/mcp`, and the
+generated admin account/signed cookie protects the break-glass web flow. `/agent` currently
+has no application-level authentication in `api/app.py`; setting `ARGUS_MCP_TOKEN` does not
+protect it.
 
-Be honest about this distinction when extending things — a lot of the design got walked through
-real processes, but a few load-bearing pieces have never touched the actual target
-infrastructure:
+## Decisions worth preserving
 
-**Verified against a real running process (not mocks):**
-- `docker build` + `docker compose up`: real image, real container, `/mcp` 401→200 auth,
-  `/breakglass` 403→200, all hit with `curl` against the actual built container.
-- The full login flow (`argus serve` run for real): first-visit password generation/reveal,
-  no re-reveal on second visit, wrong password rejected, correct password issues a working
-  session cookie, unauthenticated access redirects to `/login`.
-- `argus-breakglass-launch` (the host script): run for real with a fake `claude` shell script
-  standing in for the real CLI — confirmed it writes `CONTEXT.md`, wraps in `timeout`, and truly
-  detaches (the launched process keeps running after the launcher script's own process exits).
-- `docker compose config` merge of the base + theseus deploy overlay (labels added, dev port
-  dropped via `!reset []`, `DEPLOY_`-prefixed secrets correctly override).
-- go-task's dotenv layering (`.env` + `.env.deploy` both load for a task with its own `dotenv:`
-  — empirically confirmed in an isolated test, not assumed).
-- `Taskfile.yaml` itself (`task --list`, `task test`, `task lint`).
+- **OpenRouter for both models.** `ChatOpenAI` targets `agent.model_base_url` (OpenRouter by
+  default). `agent.model` defaults to `anthropic/claude-sonnet-4.5`; `agent.worker_model`
+  defaults to `anthropic/claude-haiku-4.5`. These are config values, not separate provider
+  code paths. The harness-profile provider key is `openai` even for an Anthropic model
+  accessed this way.
+- **One fixed worker.** The `task` tool delegates to the explicit `worker` `SubAgent`.
+  Keep deepagents' default general-purpose subagent disabled via `HarnessProfile`.
+- **Use deepagents for workspace, skills, memory, and summarization.** `create_deep_agent()`
+  returns a normal LangGraph `CompiledStateGraph`; checkpointing/resumption stays visible.
+  Filesystem tools are `ls`, `read_file`, `write_file`, `edit_file`, `delete`, `glob`, and
+  `grep`; arbitrary shell `execute` is excluded. Skills live under `skills/`; workspace
+  `AGENTS.md` is loaded as memory and created if absent. This repository's handover file
+  is distinct from that runtime workspace memory. Search is grep/progressive disclosure;
+  no vector index or Mem0 integration exists.
+- **State, history, and memory are separate.** LangGraph manages its checkpoint tables and
+  calls `.setup()` at startup. Argus owns `threads`, `runs`, `messages`, `tool_calls`, and
+  `approvals`, migrated explicitly with Alembic. Repository functions exist, but live agent
+  runs do not yet write this history. Markdown is explicit memory; durable artifacts are
+  future work. Do not hand-edit LangGraph's schema or silently run Argus migrations at boot.
+- **HTTP route order and lifespan matter.** Add AG-UI routes before mounting MCP at `/`,
+  and pass the MCP sub-app's lifespan to the parent FastAPI app. Otherwise the root mount
+  can swallow requests, or MCP's internal task group never starts and requests fail.
+  Regression coverage is in `tests/api/test_app.py`.
+- **Break-glass requests support unattended external runs.** A request records context in
+  SQLite and optionally sends an ntfy push linking to a phone-accessible approval page.
+  Argus's own scheduler is not built. A live user can answer normal tool approvals instead.
+- **Generated admin login, no URL secret.** First visit to `/login` provisions a password
+  and reveals it once; subsequent login uses a PBKDF2 hash and signed session cookie.
+  Keep login secrets out of URLs.
+- **Session launch uses a forced-command SSH key.** The key on the target host is restricted
+  to `argus-breakglass-launch`. Docker's socket is for provider operations, not the session
+  launcher. `allowed_containers` scopes provider calls when configured; the Theseus example
+  deliberately omits the allowlist. A read-only socket bind would not restrict Docker API
+  calls.
+- **Launch settings come from deployment config.** Request text cannot choose session
+  permissions or TTL. The host script writes request/manual context to `CONTEXT.md` as
+  material to review and detaches a `claude remote-control` process, with a timeout when
+  configured. The intended interaction is through the operator's Claude account, without
+  a browser-terminal implementation in Argus.
+- **Tracing must be optional and non-fatal.** OTel/OpenInference → Phoenix is planned and
+  dependencies/config exist, but instrumentation is not implemented. `otel.enabled` defaults
+  to false; a future tracing failure must not break an agent run.
 
-**Not yet verified against the real thing:**
-- An actual Hermes Agent instance connecting to `/mcp` and round-tripping an elicitation
-  prompt. Everything here rests on Hermes's *documented* behavior, not an observed connection.
-- The SSH launcher against a real host with a real forced-command `authorized_keys` entry —
-  `SshHostLauncher` is unit-tested with a mocked subprocess only.
-- The real `claude remote-control` CLI (only ever exercised against a fake shim). In particular,
-  whether workspace trust / login state genuinely survives being invoked non-interactively via a
-  forced SSH command the way the README assumes.
-- Any real deployment to theseus (no `docker-compose.deploy.yml` has ever existed on disk here).
-- The `docker` provider against a real Docker daemon with real containers (tests mock the SDK
-  client entirely).
+## Development and configuration
 
-## Explicitly not built (roadmap, same `Provider` shape as `docker`/`breakglass`)
+- `task install` installs base and dev dependencies with uv; `task test` runs pytest;
+  `task lint` runs ruff. Pre-commit configuration exists: `task precommit:install` installs
+  the hook, and `task precommit:run` checks all files. No CI workflow is committed yet.
+- Local startup uses `task postgres:up`, **`task migrate`**, then `task agent:serve`.
+  Argus-owned migrations remain an explicit operation.
+- Real Postgres tests under `tests/db/` use `ARGUS_TEST_DATABASE_URL` and skip if the database
+  is unreachable. Report skips explicitly; a green suite with skips is not database proof.
+- `OPENROUTER_API_KEY` populates `agent.api_key` through YAML expansion.
+- `ARGUS_AGENT_DATABASE_URL` supplies the example config and Alembic connection URL;
+  `POSTGRES_PASSWORD` configures Compose's Postgres and `task migrate`'s local URL.
+- `ARGUS_MCP_TOKEN` enables the optional MCP mount in `argus agent serve`; it is required
+  for standalone `argus serve --transport http`, but not stdio.
+- `ARGUS_NTFY_TOPIC_URL` is optional notification configuration. If a YAML string references
+  `${ENV_VAR}`, that variable must exist (an empty value is allowed), or config loading fails.
+- `ARGUS_BREAKGLASS_SESSIONS_DIR` is read on the **target host** by `host_launch.py` and
+  defaults to `~/.argus/breakglass-sessions`.
+- `examples/argus.example.yaml` includes agent configuration. `examples/theseus.argus.yaml`
+  currently covers providers/policy and has no `agent:` block; add the appropriate database,
+  model credential, and workspace configuration before using it for an agent deployment.
+- `docker-compose.deploy.yml` and `.env.deploy` are deliberately gitignored local overlays;
+  copy their `.example` templates and fill in actual deployment values when deploying.
 
-- `systemd` provider (unit status, journal logs, restart unit)
-- `disk`/SMART provider (health, storage usage)
-- `network` provider (ping/probe a host)
-- SEP-2322 guard-pattern elicitation (for a client on the newer MCP protocol era)
-- Async approval-queue backend for MUTATE tools with no live human in the loop at all
-  (`ApprovalBackend` in `approval/__init__.py` is already shaped to allow this without touching
-  provider code)
-- **A2A (Agent2Agent) interface** for the Argus Agent — in v0 scope, not yet designed. See
-  [`docs/DESIGN.md`](docs/DESIGN.md#interfaces) for how it's meant to relate to AG-UI
-  (`src/argus/api/`) and Argus MCP.
-
-**Updated 2026-09-18**: the Notion "Digital Home" inventory used to be out of scope on the
-premise that "the operating agent reaches it through its own separate Notion connection" —
-meaning some *external* client (Hermes, Claude Code). Now that Argus Agent itself is that
-operating agent, it needs this directly — but as a **native, agent-only knowledge source**
-(read-only, grouped with the agent's own memory/workspace), not a `Provider`/`ToolSpec` and
-never exposed over `/mcp`: no mutation risk to gate, and no reason an external MCP client
-should read the user's Notion just because it can call `docker.*`. Tracked in
-[`docs/argus-agent-v0.md`](docs/argus-agent-v0.md), not yet designed in detail.
-
-## Considered later, not adopted now
-
-- **NVIDIA OpenShell** (github.com/NVIDIA/OpenShell, Apache 2.0, alpha as of 2026-09) — a
-  Rust-based sandboxed runtime for autonomous agents: per-agent containers/microVMs plus a
-  declarative-YAML policy engine over filesystem/network/process access, framework-agnostic,
-  explicitly lists Claude Code as a supported provider. Two places it could plug into Argus if
-  revisited: (1) hardening break-glass by running the launched `claude remote-control` session
-  inside an OpenShell sandbox instead of/alongside the current forced-command-SSH-key approach;
-  (2) sandboxing a future agent-side code-execution capability (e.g. deepagents'
-  `FilesystemMiddleware` `execute` tool, currently planned to be excluded). Not pulled in now —
-  the existing SSH forced-command key + `PolicyEngine` already give a reasonable v1 boundary,
-  and adding a new Rust sandboxing runtime cuts against the project's explicit "stay small"
-  constraint until one of the two use cases above is actually needed.
-
-## Config / secrets reference
-
-- `ARGUS_MCP_TOKEN` — required for `--transport http` (the default). Bearer token for `/mcp`.
-- `ARGUS_NTFY_TOPIC_URL` — optional, break-glass push notifications.
-- No more `ARGUS_BREAKGLASS_TOKEN` — replaced by the generated admin login.
-- `ARGUS_BREAKGLASS_SESSIONS_DIR` — env var read by `host_launch.py` on the *target host*, not
-  by `argus serve` itself. Defaults to `~/.argus/breakglass-sessions`.
-- Full config schema: `examples/argus.example.yaml` (annotated) and
-  `examples/theseus.argus.yaml` (real-shaped).
-
-## Immediate next steps
-
-1. Actually deploy to theseus: `cp docker-compose.deploy.yml.example docker-compose.deploy.yml`
-   + `cp .env.deploy.example .env.deploy`, fill in real values, `task deploy`. This exercises the
-   Traefik/Homepage labels and the theseus config for the first time for real.
-2. Point a real Hermes instance at `/mcp` and confirm an elicitation round-trip actually works
-   end to end — the whole approval mechanism's correctness currently rests on documentation, not
-   an observed connection.
-3. If/when the session launcher is wanted for real: set up the forced-command SSH key on
-   theseus per the README, and confirm `claude remote-control` genuinely stays alive and
-   reachable when started that way (the workspace-trust/login-persistence assumption is untested).
-4. Consider CI (theseus has `.woodpecker.yml`; this repo has none yet) — at minimum, run
-   `pytest` + `ruff` on push.
+Keep real-service checks distinct from fake-model and mocked-client tests when updating the
+ledger. Report what was run, what passed or skipped, and what remains unverified.
