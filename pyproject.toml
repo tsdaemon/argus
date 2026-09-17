@@ -46,6 +46,7 @@ argus-breakglass-launch = "argus.host_launch:main"
 [project.optional-dependencies]
 dev = [
     "httpx>=0.27",
+    "pre-commit>=4.6.2",
     "pytest>=8",
     "pytest-asyncio>=0.24",
     "pytest-mock>=3",
