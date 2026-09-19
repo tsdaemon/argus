@@ -47,7 +47,7 @@ class OtelConfig(BaseModel):
 
 
 class AgentConfig(BaseModel):
-    """Settings for the LangGraph-based interactive agent harness (`argus agent serve`)."""
+    """Settings for the LangGraph-based interactive agent harness (the `create_app` server)."""
 
     workspace_root: str = "/var/lib/argus/agent-workspace"
     database_url: str = "postgresql://argus:argus@localhost:5432/argus"

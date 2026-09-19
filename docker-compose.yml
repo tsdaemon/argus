@@ -1,5 +1,6 @@
 services:
   argus:
+    profiles: [app]
     build: .
     restart: unless-stopped
     depends_on:
@@ -8,7 +9,7 @@ services:
     ports:
       # One process, one port: /agent (AG-UI) and, if ARGUS_MCP_TOKEN is set, /mcp +
       # /breakglass are all served here — see the README.
-      - "${AGENT_PORT:-8421}:8421"
+      - "${ARGUS_PORT:-8421}:8421"
     environment:
       ARGUS_MCP_TOKEN: ${ARGUS_MCP_TOKEN:-}
       ARGUS_NTFY_TOPIC_URL: ${ARGUS_NTFY_TOPIC_URL:-}
@@ -35,15 +36,54 @@ services:
     volumes:
       - argus-pg-data:/var/lib/postgresql/data
     ports:
-      # localhost-only: lets a non-containerized `uv run argus agent serve` (or
+      # localhost-only: lets a non-containerized `uvicorn argus.api.app:create_app` (or
       # `alembic upgrade head`) reach this same Postgres for local dev.
       - "127.0.0.1:5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U argus -d argus"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
 
   phoenix:
-    image: arizephoenix/phoenix:latest
+    # Stock Phoenix plus a patch that honours span-reported cost; see phoenix/Dockerfile.
+    build: ./phoenix
+    image: argus-phoenix:local
     restart: unless-stopped
     ports:
       - "127.0.0.1:6006:6006"
+
+  # Disposable Docker targets: a/b are allowlisted; hidden tests access restrictions.
+  # They have no host ports or data and run only with the test profile.
+  canary-a:
+    profiles: [test]
+    image: alpine:3.22
+    container_name: argus-live-a
+    restart: "no"
+    command:
+      - /bin/sh
+      - -c
+      - "trap 'exit 0' TERM INT; while :; do echo argus-live-heartbeat; sleep 5; done"
+
+  canary-b:
+    profiles: [test]
+    image: alpine:3.22
+    container_name: argus-live-b
+    restart: "no"
+    command:
+      - /bin/sh
+      - -c
+      - "trap 'exit 0' TERM INT; while :; do echo argus-live-heartbeat; sleep 5; done"
+
+  canary-hidden:
+    profiles: [test]
+    image: alpine:3.22
+    container_name: argus-live-hidden
+    restart: "no"
+    command:
+      - /bin/sh
+      - -c
+      - "trap 'exit 0' TERM INT; while :; do echo argus-live-heartbeat; sleep 5; done"
 
 volumes:
   argus-state:

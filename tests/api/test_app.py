@@ -13,7 +13,9 @@ from argus.config import AgentConfig, ArgusConfig, ProviderEntry
 def make_config(tmp_path: Path) -> ArgusConfig:
     return ArgusConfig(
         providers={},
-        agent=AgentConfig(workspace_root=str(tmp_path / "workspace"), api_key="sk-or-fake-not-real"),
+        agent=AgentConfig(
+            workspace_root=str(tmp_path / "workspace"), api_key="sk-or-fake-not-real"
+        ),
     )
 
 
@@ -98,3 +100,38 @@ def test_agent_run_endpoint_exists(tmp_path: Path, monkeypatch: pytest.MonkeyPat
     # the MCP mount's generic 404 for an unrecognized path.
     assert resp.status_code == 422
     assert "threadId" in resp.text
+
+
+@pytest.mark.parametrize("mcp_enabled", [False, True])
+@pytest.mark.parametrize("launcher_enabled", [False, True])
+def test_frontend_assets_and_launcher_availability(
+    tmp_path, monkeypatch, mcp_enabled, launcher_enabled
+):
+    if mcp_enabled:
+        monkeypatch.setenv("ARGUS_MCP_TOKEN", "test-token")
+    else:
+        monkeypatch.delenv("ARGUS_MCP_TOKEN", raising=False)
+    config = make_config(tmp_path)
+    config.providers["breakglass"] = ProviderEntry(
+        enabled=True,
+        store_path=str(tmp_path / "breakglass.sqlite"),
+        launcher={"type": "ssh", "host": "test-host", "user": "operator"}
+        if launcher_enabled
+        else None,
+    )
+    frontend = tmp_path / "frontend"
+    (frontend / "assets").mkdir(parents=True)
+    (frontend / "index.html").write_text("<title>Argus chat</title>")
+    (frontend / "assets" / "app.js").write_text("/* UI bundle */")
+    app = build_app(config, InMemorySaver(), frontend_dir=frontend)
+    with TestClient(app) as client:
+        assert "Argus chat" in client.get("/").text
+        assert client.get("/assets/app.js").text == "/* UI bundle */"
+        assert client.get("/api/ui-config").json() == {
+            "launch_enabled": mcp_enabled and launcher_enabled,
+        }
+        if mcp_enabled and launcher_enabled:
+            response = client.get("/launch", follow_redirects=False)
+            assert response.status_code == 303
+            assert response.headers["location"].startswith("/login")
+        assert client.post("/agent", json={}).status_code == 422

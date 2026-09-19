@@ -1,23 +1,65 @@
-import os
+"""Optional real-Postgres fixtures. Every test using them skips when no database answers.
 
+The schema is never hand-written here: a throwaway schema is created and `alembic upgrade
+head` builds the tables, so these tests also prove the migrations produce what the models
+expect. Nothing touches the developer's own tables.
+"""
+
+import os
+from pathlib import Path
+from uuid import uuid4
+
+import psycopg
 import pytest
+from alembic import command
+from alembic.config import Config
+from psycopg import sql
+
+from argus.db.history import SqlHistory, make_engine
+from tests.fakes import InMemoryHistory
 
 TEST_DATABASE_URL = os.environ.get(
     "ARGUS_TEST_DATABASE_URL", "postgresql://argus:testpass123@localhost:5432/argus"
 )
 
 
-@pytest.fixture
-async def db_pool():
-    """A real Postgres connection pool for `tests/db/test_repo.py`. Skips (doesn't
-    fail) if nothing is listening — bring one up with `docker compose up -d postgres`,
-    migrated via `alembic upgrade head`."""
-    from psycopg_pool import AsyncConnectionPool
-
+@pytest.fixture(scope="session")
+def postgres_url():
+    """A migrated, throwaway schema in the test database, selected through PGOPTIONS."""
     try:
-        pool = AsyncConnectionPool(TEST_DATABASE_URL, open=False)
-        await pool.open(wait=True, timeout=2)
-    except Exception as exc:  # noqa: BLE001 — any connection failure should skip, not fail
-        pytest.skip(f"no reachable Postgres at {TEST_DATABASE_URL} ({exc})")
-    yield pool
-    await pool.close()
+        conn = psycopg.connect(TEST_DATABASE_URL, autocommit=True, connect_timeout=2)
+    except psycopg.OperationalError as exc:
+        pytest.skip(f"no reachable Postgres at ARGUS_TEST_DATABASE_URL ({exc})")
+    schema = "argus_test_" + uuid4().hex
+    patch = pytest.MonkeyPatch()
+    with conn:
+        conn.execute(sql.SQL("CREATE SCHEMA {}").format(sql.Identifier(schema)))
+        try:
+            patch.setenv("PGOPTIONS", f"-c search_path={schema}")
+            patch.setenv("ARGUS_AGENT_DATABASE_URL", TEST_DATABASE_URL)
+            root = Path(__file__).resolve().parents[2]
+            command.upgrade(Config(str(root / "alembic.ini")), "head")
+            yield TEST_DATABASE_URL
+        finally:
+            patch.undo()
+            conn.execute(sql.SQL("DROP SCHEMA {} CASCADE").format(sql.Identifier(schema)))
+
+
+@pytest.fixture
+async def sql_engine(postgres_url):
+    engine = make_engine(postgres_url)
+    yield engine
+    await engine.dispose()
+
+
+@pytest.fixture
+def sql_history(sql_engine):
+    return SqlHistory(sql_engine)
+
+
+@pytest.fixture(params=["memory", "sql"])
+def history(request):
+    """The same suite runs against the in-memory fake and, when reachable, Postgres."""
+    if request.param == "memory":
+        return InMemoryHistory()
+    return request.getfixturevalue("sql_history")

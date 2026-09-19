@@ -132,7 +132,6 @@ dependencies = [
     { name = "ag-ui-protocol" },
     { name = "alembic" },
     { name = "arize-phoenix-otel" },
-    { name = "click" },
     { name = "deepagents" },
     { name = "docker" },
     { name = "fastapi" },
@@ -147,6 +146,7 @@ dependencies = [
     { name = "psycopg", extra = ["binary"] },
     { name = "pydantic" },
     { name = "pyyaml" },
+    { name = "sqlalchemy" },
     { name = "starlette" },
     { name = "uvicorn" },
 ]
@@ -159,6 +159,7 @@ dev = [
     { name = "pytest-asyncio" },
     { name = "pytest-mock" },
     { name = "ruff" },
+    { name = "watchfiles" },
 ]
 
 [package.metadata]
@@ -167,7 +168,6 @@ requires-dist = [
     { name = "ag-ui-protocol", specifier = ">=0.1.22" },
     { name = "alembic", specifier = ">=1.20.0" },
     { name = "arize-phoenix-otel", specifier = ">=0.17.1" },
-    { name = "click", specifier = ">=8.5.0" },
     { name = "deepagents", specifier = ">=0.7.14" },
     { name = "docker", specifier = ">=7" },
     { name = "fastapi", specifier = ">=0.141.1" },
@@ -188,8 +188,10 @@ requires-dist = [
     { name = "pytest-mock", marker = "extra == 'dev'", specifier = ">=3" },
     { name = "pyyaml", specifier = ">=6" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.6" },
+    { name = "sqlalchemy", specifier = ">=2.0" },
     { name = "starlette", specifier = ">=0.37" },
     { name = "uvicorn", specifier = ">=0.30" },
+    { name = "watchfiles", marker = "extra == 'dev'", specifier = ">=1.0" },
 ]
 provides-extras = ["dev"]
 

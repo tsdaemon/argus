@@ -19,6 +19,7 @@ from ag_ui.core import (
     RunStartedEvent,
 )
 from ag_ui_langgraph import LangGraphAgent
+from ag_ui_langgraph.utils import langchain_messages_to_agui
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.types import Command
 
@@ -39,6 +40,19 @@ class ArgusAgent(LangGraphAgent):
     multi-response sentinels are not LangChain HITL responses. Validate before creating
     a Command so an invalid answer cannot be persisted into the checkpoint.
     """
+
+    async def thread_snapshot(self, thread_id: str) -> tuple[list, list[Interrupt]]:
+        """Read a checkpoint without starting a run or executing pending tools."""
+        state = await self.graph.aget_state({"configurable": {"thread_id": thread_id}})
+        messages = self._filter_orphan_tool_messages((state.values or {}).get("messages", []))
+        return (
+            langchain_messages_to_agui(messages),
+            self._interrupts_to_agui(self._collect_interrupts(state.tasks)),
+        )
+
+    async def delete_thread_state(self, thread_id: str) -> None:
+        """Drop the thread's LangGraph checkpoints, including any pending approval."""
+        await self.graph.checkpointer.adelete_thread(thread_id)
 
     async def run(self, input: RunAgentInput) -> AsyncIterator[BaseEvent]:
         try:
@@ -103,7 +117,7 @@ def build_agent(
     provider_settings: dict[str, dict[str, Any]],
     policy: PolicyEngine,
     checkpointer: BaseCheckpointSaver,
-) -> LangGraphAgent:
+) -> ArgusAgent:
     graph = build_graph(
         config=config,
         providers=providers,

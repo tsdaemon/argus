@@ -5,12 +5,12 @@ something through the read/mutate tools it has. It is classified READ, deliberat
 cannot mutate anything on the target system, it can only record that a human's attention is
 needed. There is no tool anywhere on this MCP server that approves or executes a break-glass
 request — that happens entirely outside the MCP surface, via the phone-reachable web view in
-`argus.mcp.webapp` (or the `argus breakglass` CLI as a local convenience). Approving a request
+`argus.mcp.webapp`. Approving a request
 does not grant any access by itself; it only marks intent so the human can go open a scoped
 session themselves.
 
-`BreakGlassStore` is the shared sqlite-backed store both this provider and `argus.mcp.webapp` /
-`argus.cli` read and write. Login to that web view is a generated admin account (see
+`BreakGlassStore` is the shared sqlite-backed store both this provider and `argus.mcp.webapp`
+read and write. Login to that web view is a generated admin account (see
 `argus.webauth.AdminUserStore`) rather than a pre-shared token — no secret to configure,
 and no secret ever ends up sitting in a bookmarked URL.
 """
@@ -49,7 +49,7 @@ class BreakGlassRequest:
 class BreakGlassStore:
     """Sqlite-backed store of break-glass requests. Opens a short-lived connection per
     call rather than holding one open, so it's safe to share between the MCP server
-    process, the web app process, and the CLI without any locking of our own."""
+    process and the web app process without any locking of our own."""
 
     def __init__(self, path: str | Path) -> None:
         self._path = Path(path)

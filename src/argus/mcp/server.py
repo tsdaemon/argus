@@ -1,9 +1,7 @@
-"""Builds the MCP server: loads config, wires the policy engine and approval backend,
-and registers whichever providers are enabled (see `argus.providers.registry`).
+"""Build the optional MCP interface mounted inside the Argus agent application.
 
-Also builds the combined HTTP app: the MCP endpoint and the break-glass web view mounted
-on one Starlette app, so a real deployment is one process/port, not two (see
-`argus.cli` for stdio vs. this).
+Wire shared providers to policy and elicitation, and assemble the MCP/break-glass
+sub-app. `argus.api.app` owns the application; this module never starts a process.
 """
 
 from __future__ import annotations
@@ -24,7 +22,7 @@ from argus.providers.registry import instantiate_providers
 def build_server(
     config: ArgusConfig, *, auth: AuthProvider | None = None
 ) -> tuple[FastMCP, dict[str, Provider]]:
-    """Build the MCP server and return it along with the instantiated providers (keyed
+    """Build the FastMCP interface object and return it along with the instantiated providers (keyed
     by config name), so callers can reach into e.g. the breakglass provider's store
     without re-reading the config or re-instantiating anything."""
     mcp: FastMCP = FastMCP("argus", auth=auth)
@@ -43,9 +41,8 @@ def build_server(
 
 
 def build_http_app(mcp: FastMCP, providers: dict[str, Provider]) -> StarletteWithLifespan:
-    """The one-process deployment shape: `/mcp` plus (if the breakglass provider is
-    enabled) the phone-facing `/breakglass` view — login-gated, see `argus.webauth` —
-    mounted on the same app."""
+    """Build the sub-app mounted by `argus.api.app`: `/mcp` and, when configured,
+    the login-gated break-glass web routes."""
     app = mcp.http_app(path="/mcp")
 
     breakglass = providers.get("breakglass")

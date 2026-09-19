@@ -1,10 +1,12 @@
 # Argus Agent v0 — execution ledger
 
-Tracks the refactor from a standalone MCP server into Argus Agent + Argus MCP. See
+Tracks implementation of the Argus agent and its interfaces. See
 [`DESIGN.md`](DESIGN.md) for the design/requirements this
 executes against. Update this file as work lands — it's a status log, not a plan;
 finished phases and verification logs live in [History](#history), including reversals.
 Current working instructions live in [`AGENTS.md`](../AGENTS.md).
+The [live test plan](LIVE_TEST_PLAN.md) gives the staged real-model/container checks;
+those live checks remain unexecuted until results are recorded here.
 
 Legend: `[x]` done and verified · `[~]` done but unverified/partial · `[ ]` not started.
 
@@ -12,8 +14,9 @@ Legend: `[x]` done and verified · `[~]` done but unverified/partial · `[ ]` no
 
 - `[x]` Interactive LangGraph agent can run and resume from persisted state — verified
       against real Postgres (`tests/db/test_checkpointer.py`), using a fake chat model.
-- `[ ]` Minimal AG-UI web interface can start/continue a run and display agent/tool
-      activity — backend endpoint verified live; no frontend yet.
+- `[x]` React/CopilotKit interface starts/continues runs, displays chat/tool activity,
+      and restores saved conversations. Browser integration checks use a real Python
+      server and Postgres with deterministic model/Docker fakes.
 - `[x]` Agent can invoke constrained read-only provider tools — `docker.*` bound via
       `langchain_bind`; tests mock the Docker SDK, so live Theseus diagnostics remain
       unverified.
@@ -26,22 +29,25 @@ Legend: `[x]` done and verified · `[~]` done but unverified/partial · `[ ]` no
 - `[x]` Deterministic permission metadata + a backend HITL approval flow —
       `docker.restart_container` pauses and resumes through `/agent`, including a real
       loopback Uvicorn server (`tests/api/test_approvals.py`). Models and Docker SDK calls
-      are faked; a real OpenRouter/frontend/host round-trip remains unverified.
-- `[x]` PostgreSQL persists checkpoints — verified live. Raw history/tool-calls/approvals:
-      schema + repo functions exist and are tested; **not yet wired into a live run**.
+      are faked; the CopilotKit UI is now verified too. A real OpenRouter/target-host
+      round-trip remains unverified.
+- `[x]` PostgreSQL persists checkpoints and chat history — verified live. Conversations
+      are indexed and message snapshots archived during runs. Separate raw
+      run/tool-call/approval audit instrumentation remains unfinished.
 - `[x]` Explicit Markdown memory loadable/modifiable by the agent itself, including
       `AGENTS.md` — via `deepagents`' memory middleware.
-- `[ ]` Traces visible in Phoenix via OTel/OpenInference — not started.
+- `[x]` Traces visible in Phoenix via OTel/OpenInference — a synthetic LangChain call reached Phoenix; a real agent run is still to be checked.
 - `[ ]` Break-glass action launches Claude Code on Theseus from the Agent UI without
       NOPASSWD sudo — `argus.launcher` and `/launch` exist, but real SSH/Claude Remote
-      Control and the frontend link remain unverified/unbuilt.
+      Control remain unverified. The frontend links to the existing authenticated
+      `/launch` route when the break-glass web interface is enabled.
 - `[ ]` A2A interface lets another agent call into Argus Agent — not started, but in v0
       scope (see design doc's Interfaces section).
 
 ## Explicitly out of scope for v0
 
 Mem0/learned memory, vector/semantic search over workspace Markdown (grep-only for now,
-seam left open), scheduled health runs, A2UI, self-hosted LangSmith, generic multi-agent
+seam left open), scheduled health runs, self-hosted LangSmith, generic multi-agent
 support beyond the fixed worker, chat gateways (Telegram/Discord), broad multi-SDK provider
 abstraction (OpenRouter is the one abstraction used, and it's a config value, not a code path
 per provider),
@@ -52,15 +58,10 @@ evaluation.
 
 ## Not started
 
-- `[ ]` **History instrumentation**: `db/repo.py` functions exist and are tested, but
-  nothing calls them during a live run yet — no `messages`/`tool_calls`/`approvals`
-  rows are written by an actual agent turn. Needs a LangChain middleware or callback
-  hooked into the graph.
-- `[ ]` **OTel/Phoenix wiring** (`agent/tracing.py`, not created). Must be non-fatal to a
-  run — not yet designed how.
-- `[ ]` **React frontend**. Backend AG-UI endpoint is live and tested; no UI consumes it
-  yet. Includes the break-glass "launch" action, which is a design decision already
-  made (link to the existing `/launch` page, not a new API) but not yet built.
+- `[ ]` **Execution audit instrumentation**: chat indexing and `messages` snapshot
+  archival are wired into live runs. Separate `runs`/`tool_calls`/`approvals` audit
+  records still need a LangChain middleware or callback hooked into the graph.
+- `[x]` **OTel/Phoenix wiring** (`agent/tracing.py`). Non-fatal to a run; see the tracing entry in the ledger.
 - `[ ]` A2A interface — **in v0 scope** (see design doc's new Interfaces section), not
   yet designed. Worth checking LangChain's own
   [Agent Protocol](https://github.com/langchain-ai/agent-protocol) (`runs`/`threads`/
@@ -75,6 +76,16 @@ evaluation.
 - `[ ]` **Severity-tiered notifications** (SEV0 phone call, SEV1 ntfy, SEV2 email) — see
   design doc's new Notifications section. No telephony/email integration exists yet;
   what assigns a severity is undecided. Needs a design pass before implementing.
+- `[ ]` **Generative UI**: let the agent render purpose-built UI in the chat (for example a
+  container status table, a log viewer, or a metrics panel) instead of only text and the
+  approval card. Not designed and not started; this replaces A2UI's earlier place in the
+  out-of-scope list. What exists: CopilotKit's chat with a wildcard tool-call renderer
+  (`WildcardToolCallRender`) and a custom interrupt renderer for approvals
+  (`frontend/src/Approvals.tsx`). "Dynamic UI integration" is also one of the design doc's
+  named learning goals. Open questions: the mechanism (CopilotKit generative UI through tool
+  renderers over AG-UI, or the A2UI protocol); where the component definitions live and how
+  the agent chooses one; how to keep it read-only so a rendered component can never become
+  a way around the approval flow; and how it is tested without a browser-only path.
 
 Provider roadmap beyond the current Docker/break-glass tools: `systemd` (status,
 journal, restart), `disk`/SMART, and `network` probes. An asynchronous MCP approval-queue
@@ -84,8 +95,9 @@ No CI workflow is committed; pytest and ruff are the intended baseline.
 ## Known open risks / things to re-verify before calling v0 done
 
 - The approval path now has HTTP/graph integration coverage with deterministic models
-  and a mocked Docker SDK, including worker delegation and parallel interrupts. A real
-  model and the future React UI still need to exercise that same path. The adapter's
+  and a mocked Docker SDK, including worker delegation and parallel interrupts. The
+  CopilotKit UI now exercises approval, rejection, mixed batches, and reload recovery.
+  A real model still needs to exercise that same path. The adapter's
   resume hook is an upstream integration point; retain these checks when upgrading it.
 - No real `OPENROUTER_API_KEY` has been used against a live model anywhere in this
   work — all graph/API tests use fake chat models. The actual OpenRouter integration
@@ -93,15 +105,20 @@ No CI workflow is committed; pytest and ruff are the intended baseline.
   service.
 - `docker compose up --build` for the full consolidated stack (agent image, Postgres,
   Phoenix) has not been run end-to-end — only `docker compose config` (syntax) and a
-  local (non-containerized) `uv run argus agent serve` against a real Postgres
+  local Argus process against a real Postgres
   container.
-- `/agent` currently has no application-level authentication. The MCP bearer token
-  protects `/mcp` only; resolve agent access control before network deployment.
+- `/agent`, the chat UI, and the history API currently have no application-level
+  authentication. The MCP bearer token protects `/mcp` only; resolve agent access
+  control before network deployment.
+- The frontend uses CopilotKit's direct-agent registration hook
+  (`agents__unsafe_dev_only`) to keep one Python service; dependencies are pinned.
+  Recheck this integration when upgrading CopilotKit. Browser restoration replays a
+  durable transcript and pending checkpoint approvals, not every past event or an
+  in-flight run; full cross-tab live synchronization is not built.
 - `examples/theseus.argus.yaml` has no `agent:` block. Complete its database, model
   credential, and workspace settings before using it for an agent deployment.
 - Real Hermes elicitation remains unobserved; the original compatibility investigation
-  was documentation-only. The README's stronger "confirmed to work" wording is not live
-  verification evidence.
+  was documentation-only.
 - The Docker provider has not been exercised against a real daemon with real containers.
 - Real forced-command SSH and Claude Remote Control remain unverified, including
   noninteractive login/workspace trust and whether the session stays reachable.
@@ -113,6 +130,9 @@ No CI workflow is committed; pytest and ruff are the intended baseline.
 This section records implementation milestones, reversals, and checks reported during
 prior work. Paths, test counts, and choices in early entries describe that point in time;
 later entries can supersede them. Moving these notes here did not rerun the checks.
+**Historical server commands below are obsolete:** the sole runtime is now `argus serve`,
+which starts the agent with its interfaces. The old MCP-only/stdio modes and
+`argus agent serve` command have been removed; do not restore them from these records.
 
 ### Original MCP implementation and project direction
 
@@ -261,12 +281,13 @@ serve`/`argus breakglass` stay dependency-free.
 overlay alongside the existing MCP-only `docker-compose.yml`/`Dockerfile`. **Reversed**
 per explicit feedback: the agent is the primary feature, not an add-on. Folded Postgres
 + Phoenix + the `agent` extra into the single default `docker-compose.yml`/`Dockerfile`;
-deleted the overlay files. `argus serve` (MCP-only) still works from the same image.
+deleted the overlay files. An MCP-only command remained at that point; it was later
+removed in the single-runtime correction below.
 
 `[x]` **Follow-up correction**: initially left both port 8420 (leftover from the
 pre-consolidation MCP-only default) and 8421 (agent) exposed/published, despite `/mcp`
 and `/agent` being mounted on the *same* FastAPI app bound to *one* uvicorn port. Fixed:
-one port (`AGENT_PORT`, default 8421) in `Dockerfile` `EXPOSE`, `docker-compose.yml`
+one port (`ARGUS_PORT`, default 8421) in `Dockerfile` `EXPOSE`, `docker-compose.yml`
 `ports:`, and `.env.example`; `docker-compose.deploy.yml.example`'s Traefik
 `loadbalancer.server.port` label corrected from `8420` to `8421`.
 
@@ -278,17 +299,16 @@ deepagents/FastAPI/Postgres/OTel dependencies folded into base `dependencies` in
 `pyproject.toml` (previously `[project.optional-dependencies].agent`) — per explicit
 feedback, there's no more "MCP-only" install to keep light for. `Dockerfile` no longer
 passes `--extra agent` to `uv sync` (it's the only sync now). `cli.py`'s lazy imports in
-`agent serve` are kept anyway, purely for `argus serve`/`argus breakglass` startup
-latency, not as a hard dependency boundary. Also removed the now-unused
+`agent serve` were retained at that point for CLI startup latency, not as a hard
+dependency boundary. The command split was later removed. Also removed the now-unused
 `langchain-anthropic` (dead since the OpenRouter correction above) and renamed the
 package from `argus-mcp` to `argus` in `pyproject.toml`.
 
 `[x]` **Framing correction**: "Argus MCP as an independently-deployed, standalone
 pillar" was never accurate to how this actually runs — corrected in the design doc.
-Argus Agent is the one process that runs (`argus agent serve`); MCP is an optional
-interface of that same process, toggled by whether `ARGUS_MCP_TOKEN` is set. `argus
-serve` (bare MCP, no agent) still exists as a lower-level building block/testing
-surface, not as a deployment story to preserve.
+The intended architecture was one agent process with an optional MCP interface,
+toggled by `ARGUS_MCP_TOKEN`. Leaving a bare-MCP command for testing contradicted that
+requirement; the single-runtime correction below removes it outright.
 
 ### Package restructuring (mid-course correction)
 
@@ -395,3 +415,482 @@ Validation: **128 passed, no skips** in the full pytest suite, including the exi
 real-Postgres persistence/repository checks; ruff and `git diff --check` passed. Upstream
 deprecation warnings remain. No OpenRouter key was configured, and no actual Docker
 restart or real-model/frontend approval flow was exercised.
+
+### CopilotKit frontend and persistent chat history — 2026-09-18
+
+`[x]` Added the React/CopilotKit v2 frontend at `/`: chat, streamed tool rendering,
+approve/reject cards, conversation navigation, reload recovery, a mobile layout, and a
+link to the existing `/launch` page only when its launcher is configured. CopilotKit's
+`CopilotChat` and `useInterrupt` own the chat/approval lifecycle; the small Argus
+`HttpAgent` subclass supplies read-only history replay and sends only a new user turn
+or approval response to the backend.
+
+The user explicitly requested CopilotKit and chat history. The implementation follows
+the upstream [self-managed persistence guidance](https://docs.copilotkit.ai/langgraph-python/threads-self-managed):
+Argus owns the conversation list and Postgres storage. Direct agent registration uses
+`agents__unsafe_dev_only`, keeping a single Python application process without a
+CopilotKit runtime server or Enterprise thread store. Versions are pinned in npm's
+lockfile; the integration should be rechecked on upgrades.
+
+`[x]` Added thread creation/list/detail and read-only connect endpoints. `/agent` now
+indexes conversations and archives AG-UI message snapshots through `db/repo.py`. The
+`c81a9a2d4f10` migration adds activity ordering, stable message IDs, and insertion order.
+Snapshots upsert messages without removing older context; the UI retains the full
+archive when the agent summarizes, without returning that archive to the model.
+Pending approvals come from the current checkpoint, so reading history cannot execute
+them. Separate run/tool/approval audit records remain future work.
+
+`[x]` Vite supports local development against the Python API. Production assets are
+served by FastAPI, before the optional MCP mount. The Dockerfile builds them in a Node
+stage and copies them into the Python image. Added frontend setup/build/test tasks and
+updated README, design, and current AGENTS guidance.
+
+Verification:
+
+- **136 pytest tests passed, no skips**; real Postgres checkpoint/repository/history
+  checks included. History tests rebuild the API/checkpointer before answering restored
+  approvals, check transcript ordering and deduplication, and verify archived context
+  stays visible without entering the model prompt. Ruff and `git diff --check` passed.
+- **5 Playwright tests passed** in Chromium against a listening Uvicorn server and a
+  freshly migrated, isolated Postgres schema. Covered continued chats, switching/reload,
+  approving/rejecting restored requests, mixed batch decisions, mobile layout, and
+  history-load error recovery. The real graph/policy/provider code runs; the model and
+  Docker SDK are deterministic fakes. Screenshots were inspected on desktop and mobile.
+- `npm run build` passed TypeScript checking and Vite compilation. Vite reports large
+  dependency chunks from CopilotKit's rendering stack; bundle optimization is not done.
+- `docker build -t argus:ui-check .` succeeded. A process in that built image used
+  FastAPI's TestClient to retrieve `/`, all five assets referenced by its index,
+  `/agent/health`, and `/api/ui-config`. This does not establish a full Compose deployment.
+
+No live OpenRouter, real container operation, forced-command SSH, or Theseus deployment
+was exercised. Authentication for the agent/chat/history interface and reconnecting to
+an actively streaming run remain open; saved messages and pending approvals do restore.
+
+### Single agent runtime and local live testing — 2026-09-19
+
+`[x]` Removed the separate MCP startup path, including its HTTP/stdio transport switch.
+`argus serve` now starts the complete agent application with UI, history, and optional
+MCP on port 8421. There are no `agent serve` or `mcp serve` commands. Docker uses that
+same entry point. Current README, design, AGENTS, package descriptions, and examples
+were corrected together; AGENTS explicitly prohibits reintroducing an MCP-only runtime.
+
+`[x]` Local testing runs Argus on the host while Compose runs Postgres, Phoenix, and
+Docker canaries. The user chose to retain a/b/hidden for provider checks and wants to
+watch workspace writes live. `examples/argus.dev.yaml` uses `.argus/workspace` and
+allowlists a/b. `task serve` supplies the local database URL, matching `task migrate`.
+The application container is behind Compose's opt-in `app` profile. Existing local
+live-test configuration was adjusted to the host workspace and localhost database
+access, preserving the user's canaries and removal of Argus from the local overlay.
+
+The live test plan now covers this setup, including workspace edits visible in an editor,
+real Docker approvals, allowlist checks, conversation/pending-approval recovery, and
+optional MCP through the same process. These real-model checks have not yet been run.
+
+Verification for this correction:
+
+- **139 pytest tests passed, no skips**, including real Postgres checks; Ruff and
+  `git diff --check` passed. CLI regressions require the full agent application and
+  reject the removed server modes. Existing API tests cover optional MCP and UI routes.
+- Compose configuration validated for default dependencies, the `test` profile, and
+  the `app` deployment profile. The existing local overlay retains the canaries,
+  publishes Postgres on localhost, and does not enable the Argus container.
+- Isolated go-task checks verified `.env` loading, the default/overridden config path,
+  and matching localhost database URLs for `task serve` and `task migrate`.
+- A real local `argus serve` process using the development config and existing test
+  Postgres returned 200 for `/`, `/agent/health`, `/api/threads`, and `/api/ui-config`.
+  Its MCP interface rejected a missing token with 401 and accepted authenticated
+  initialization with 200. It initialized `.argus/workspace` on the host and shut down
+  cleanly afterward. The model key was fake; no model calls or Docker actions ran.
+
+### Overmind development processes — 2026-09-19
+
+Added `Procfile.dev` for the user's choice of Overmind. Its entries invoke
+`uv run argus serve` and `npm --prefix frontend run dev` directly, with no Task calls
+inside the Procfile. The agent workspace stays on the host. `task dev` starts Compose
+dependencies, invokes the migration task, and launches Overmind after checking for
+Overmind and tmux. It supplies the local database URL, loads `.env`, and passes an
+optional `CONFIG=...` selection to the agent process. README documents this workflow.
+The default `.overmind.sock` control socket is gitignored. Frontend changes reload
+through Vite; Python changes still require restarting the agent process.
+
+Verified setup order, direct process commands, dotenv/database environment, and both
+default and overridden config paths using isolated command stubs. `git diff --check`
+passed. The actual Overmind-managed application was not started during this check.
+
+Follow-up: moved `ARGUS_AGENT_DATABASE_URL` to the Taskfile's shared top-level `env`
+and renamed `task serve` to `task backend:dev`. Configuration selection now uses
+`ARGUS_CONFIG` throughout the Taskfile, Procfile, and current docs, including
+`task dev ARGUS_CONFIG=...` and `.env`. The Procfile still invokes uv/npm directly.
+
+Renamed the Docker host-port variable from `AGENT_PORT` to `ARGUS_PORT`, preserving
+existing local `.env` values, and grouped the Taskfile into project workflows,
+dependencies/database, backend, frontend, break-glass, Docker, and deployment sections.
+
+Regrouped the remaining top-level tasks into namespaces: `migrate` → `backend:migrate`,
+`postgres:up` → `deps:postgres`, `breakglass:list` → `backend:breakglass:list`, and added
+`backend:lint` (top-level `lint` now delegates to it). The break-glass section was folded
+into Backend and "Dependencies and database" renamed "Dependencies". README, AGENTS.md, and
+the live test plan use the new names. `task --list` verified; the renamed tasks were not run.
+
+### mprocs replaces Overmind — 2026-09-19
+
+Overmind runs its processes in a detached tmux server, so `task dev` did not put the user
+in a tmux session. Replaced it with mprocs: `Procfile.dev` became `mprocs.yaml` (same
+`agent` and `frontend` commands, `ARGUS_CONFIG` still defaulting to
+`examples/argus.dev.yaml`), the `dev` task checks only for `mprocs`, and the
+`.overmind.sock` gitignore entry was removed. In the TUI, `r` restarts the selected process
+and `q` quits and stops both. README, AGENTS.md, the live test plan, and `.env.example`
+were updated. Only `task --list` parsing was checked; mprocs is not installed here, so
+`task dev` has not been run. The Overmind entry above is kept as history.
+
+### Chat styling pass — 2026-09-19
+
+Light restyle of the CopilotKit chat in `frontend/src/styles.css`, as a stopgap before a
+full rework. CopilotKit's colour tokens are now overridden on `.argus-chat` and its
+`[data-copilotkit]` descendants (they are defined on those elements, so setting them only
+on the wrapper had no effect). The message list and input are centred in a 780px column,
+message text is 15px with more line height and spacing, and the user bubble is a soft
+green with a squared corner. Selectors use CopilotKit's `data-testid` attributes and
+`copilotKit*` classes plus one `cpk:bg-muted` class, so a CopilotKit upgrade may need
+them adjusted. `npm run build` passes. Not checked visually or with Playwright:
+Chromium and the test Postgres are not available here.
+
+Moved the Compose dependencies into mprocs as a foreground `deps` process
+(`docker compose --profile test up postgres phoenix canary-a canary-b canary-hidden`), so their
+logs are visible next to the agent and Vite. `task dev` now only invokes mprocs. The `agent`
+process polls `pg_isready` in the Postgres container, runs `alembic upgrade head`, then
+serves, so restarting it with `r` re-applies migrations. Quitting mprocs now stops the
+containers as well (volumes are kept), where before they kept running. README, AGENTS.md, and
+the live test plan were updated. Not run: mprocs is not installed here.
+
+### Docker Desktop is the local engine — 2026-09-19
+
+Starting Docker Desktop with WSL integration replaced `/var/run/docker.sock` and rewrote
+`~/.docker/config.json` with a `credsStore` pointing at a Windows helper that WSL cannot
+find, so the first image pull (`postgres`, `phoenix`, `alpine`) failed under `task dev`.
+The pre-existing native `docker.service` was still running the earlier Argus dependencies
+and tsdfm containers on a separate engine. That engine was stopped and disabled
+(`docker.service`, `docker.socket`, `containerd.service`), and the `credsStore` line was
+removed. `docker` now reaches only Docker Desktop, and the Compose dependencies run there.
+Its volumes on the old engine (including the earlier Argus Postgres data) were not migrated.
+Environment change only; no repository files were affected.
+
+Made the fix durable by adding Docker Desktop's `resources/bin` directory to `PATH` in
+`~/.zshenv` (read by non-interactive shells such as mprocs children), so
+`docker-credential-desktop.exe` resolves even if Docker Desktop rewrites `credsStore` into
+`~/.docker/config.json` on a later start. The old engine's services stay disabled.
+
+### Database connection failure after the engine switch — 2026-09-19
+
+`GET /api/threads` returned 500 right after the first `task dev` on Docker Desktop. The
+Compose Postgres and Phoenix containers had started while the old engine still held
+`127.0.0.1:5432` and `:6006`, so Docker Desktop never published their ports (`docker port`
+was empty). The `agent` process's migration therefore ran against the old engine's Postgres,
+and the new database had no tables. Restarting the two containers (`docker compose --profile
+test restart postgres phoenix`) published the ports; `alembic upgrade head` then created the
+schema and `/api/threads` returned 200. Cause was the overlap with the old engine, not a
+config change.
+
+Tracing is not implemented: `agent/tracing.py` does not exist, nothing in `src` reads
+`agent.otel`, and `examples/argus.dev.yaml` has `otel.enabled: false`, so Phoenix stays empty.
+This matches the open OTel/Phoenix item above.
+
+Moved Docker back out of mprocs. `task dev` again runs `deps:up`, then `backend:migrate`,
+then mprocs with only `agent` and `frontend`, so Compose keeps the dependency ordering
+(`up -d --wait`) and the shell wait loop is gone. `deps:up` is now
+`docker compose --profile test up -d --wait` (the profile covers Postgres, Phoenix, and the
+canaries), replacing the foreground `up` that had been in the Taskfile. Quitting mprocs
+leaves the containers running; `task deps:down` stops them. README, AGENTS.md, and the live
+test plan were updated. Not run: mprocs is not installed here.
+
+### Favicon — 2026-09-19
+
+`frontend/src/favicon.svg` is a single eye (cream almond, blue iris taken from the logo's eye
+colours, black pupil) on the logo's `#050709` background, linked from `frontend/index.html`.
+The first attempts, a placeholder circle and then a 128px downscale of the whole logo, were
+replaced: the full logo is too detailed to read at tab size. The SVG is under `src/` rather
+than `public/` so Vite emits it under `/assets/`, the only static path `argus serve` exposes
+besides `/`. Rendered at 16, 32, 64, and 256px to check legibility; `npm run build` emits the
+hashed icon and rewrites the link. Not yet checked in a browser tab.
+
+Changed the sidebar tagline under the Argus name from "HOME OPERATIONS" to "SEE EVERYTHING"
+(`frontend/src/App.tsx`) and the page title to "Argus · See everything"
+(`frontend/index.html`). No test referenced the old text.
+
+### Palette A and logo in the UI — 2026-09-19
+
+Restyled `frontend/src/styles.css` as a dark theme built on Color Hunt palette
+`#000000 #5682b1 #739ec9 #ffe8db`, with the logo's own background `#050709` as the base.
+Steel blue and cream are the accents; surface, border, and muted-text tints were derived
+from them rather than taken from the palette. The document carries `class="dark"` so
+CopilotKit's dark tokens and prose colours apply regardless of the OS theme, and the chat
+tokens are overridden with `.argus-chat.argus-chat` to beat CopilotKit's `.dark` selector.
+Project tokens are prefixed to avoid colliding with CopilotKit's `--muted` and `--accent`.
+The approval card keeps an amber left border to read as "needs attention".
+
+The `◉` text mark is replaced by the logo (`frontend/src/logo.png`, a 320px copy of
+`docs/logo.png`) in the sidebar and the empty state. The service name is now lowercase in
+UI text ("argus", `argus · see everything`, the input placeholder, the approval heading, the
+load error), and `tests/chat.spec.ts` uses the new placeholder. Code identifiers such as
+`ArgusHttpAgent` are unchanged. `tsc` and `npm run build` pass; the Playwright suite and
+the visuals were not run or checked (no Chromium or test Postgres here).
+
+### Collapsible sidebar — 2026-09-19
+
+The sidebar has a `«`/`»` toggle (`aria-expanded`, labelled "Collapse sidebar" / "Expand
+sidebar") that shrinks it to a 76px rail showing the logo, a new-conversation button, the
+toggle, and the status dot; the conversation list and text labels are hidden. The choice is
+kept in `localStorage` (`argus.sidebar.collapsed`, guarded by try/catch) and the width change
+animates unless reduced motion is requested. On narrow screens the top-bar layout is
+unchanged and the toggle is hidden. Added a Playwright test for collapse and reload
+persistence. `tsc` and `npm run build` pass; the test and the visuals were not run or
+checked (no Chromium or test Postgres here).
+
+### Top bar removed — 2026-09-19
+
+Removed the header above the chat ("WORKSPACE", the thread title or a generic "Home
+infrastructure", and the Ready pill): it repeated what the sidebar list already shows. The
+run state (`role="status"`, "Ready" / "Working…") and the optional "Open privileged session"
+link moved into the sidebar footer, and the status dot pulses while a run is active (not
+under reduced motion). The dead `.topbar`, `h1`, `.run-status`, and `.header-actions` rules
+were deleted. When the sidebar is collapsed only the dot remains. No test referenced the
+header. `tsc` and `npm run build` pass; visuals not checked.
+
+Reworked the sidebar toggle to match the reference pattern: a borderless panel icon (rounded
+rectangle with a vertical divider) in the top row beside the logo, replacing the bordered
+`«`/`»` button at the bottom. The native `title` tooltip became a `data-tooltip` pill (dark,
+rounded, delayed 0.3s), opening below the button when expanded and to the right of the rail
+when collapsed; the collapsed new-conversation button uses the same tooltip. When collapsed,
+the logo sits above the toggle. `tsc` and `npm run build` pass; visuals not checked.
+
+### Tracing wired to Phoenix — 2026-09-19
+
+Added `src/argus/agent/tracing.py`. `setup_tracing(config.agent.otel)` runs once at `argus
+serve` startup (`cli.py`) and, when `otel.enabled`, calls `phoenix.otel.register(endpoint,
+project_name, batch=True)` and `LangChainInstrumentor().instrument(...)`, so LangGraph,
+model, and tool calls become OpenInference spans. Export happens in a background batch thread
+and every setup exception is caught and logged, so an unreachable or broken collector cannot
+fail or slow a run. `register` picks the protocol from the endpoint, so `OtelConfig` and its
+defaults are unchanged: the dev config uses the already-published
+`http://127.0.0.1:6006/v1/traces` (HTTP), and the example config's Compose-internal
+`http://phoenix:4317` (gRPC) still applies. `examples/argus.dev.yaml` now sets
+`otel.enabled: true`; the example config stays off.
+
+Tests in `tests/agent/test_tracing.py` cover disabled, enabled (endpoint passed through), and
+failure (logged, not raised); `tests/agent/__init__.py` was added to match the other test
+packages. Verified live: with tracing on against the running Phoenix, a LangChain fake-model
+call produced an `LLM` span in project `argus-trace-check` via Phoenix's REST API. That check
+used a synthetic model, not a full agent run. A leftover `argus-trace-check` project remains in
+Phoenix and can be deleted in its UI. The running agent must be restarted to pick up the
+config.
+
+### One local config — 2026-09-19
+
+Local development had two configs: the committed `examples/argus.dev.yaml` and a gitignored,
+older copy `argus-live.local.yaml` that the user's `.env` selected through `ARGUS_CONFIG`.
+The copy differed only in `otel.enabled: false`, so the running agent ignored the newly wired
+tracing. Reconciled on `examples/argus.dev.yaml` alone: removed the `ARGUS_CONFIG` override
+from the Taskfile (`dev`, `backend:dev`) and `mprocs.yaml` (the path is now literal), removed
+it from `.env.example`, and dropped every mention of per-developer configs from the README,
+AGENTS.md, and the live test plan. In the user's working tree, the `ARGUS_CONFIG` line was
+deleted from `.env` and `argus-live.local.yaml` was removed (verified identical to the dev
+config apart from `otel`). The agent must be restarted to pick up the change. Docker
+deployment still selects its own file through `CONFIG_FILE`. Earlier ledger entries that
+mention `ARGUS_CONFIG` are kept as history.
+
+### Delete a conversation; SQLAlchemy models and a history repository — 2026-09-19
+
+**Feature.** `DELETE /api/threads/{id}` (204; 404 if unknown; 422 for a bad id; 503 without a
+history store) removes the conversation's history and its LangGraph checkpoints
+(`ArgusAgent.delete_thread_state` → `adelete_thread`), including a pending approval. The
+sidebar shows a trash icon on row hover with an inline "Delete this conversation? Delete /
+Cancel" confirmation; deleting the open conversation selects the next one (or the empty
+state) and updates the URL. Existing Phoenix traces are not deleted.
+
+**Cascades.** The foreign keys had no `ON DELETE CASCADE`, so deletion order mattered. Added
+migration `e5b7c9a31d20` that recreates the six foreign keys with `ON DELETE CASCADE`, and
+SQLAlchemy models (`argus/db/models.py`) whose relationships use `cascade="all,
+delete-orphan"` and `passive_deletes=True`, so deleting a thread is one `DELETE` and the
+database removes runs, messages, tool calls, and approvals. The models are Alembic's
+`target_metadata` (with an `include_object` filter that ignores LangGraph's checkpoint
+tables), and `alembic check` reports no drift between models and migrations. `sqlalchemy>=2.0`
+is now a declared dependency.
+
+**Repository pattern.** This replaces the earlier "no ORM, plain functions" decision.
+`argus/db/repo.py` was removed. `argus/db/history.py` defines the `HistoryRepository`
+protocol (threads, chat messages, delete) and `SqlHistory`, a SQLAlchemy async
+implementation that also carries the not-yet-used run/tool-call/approval audit methods.
+`add_chat_routes` and `build_app` take a `HistoryRepository` instead of an
+`AsyncConnectionPool`; `argus serve` builds an async engine and disposes it on shutdown.
+
+**Tests no longer need Postgres.** `tests/fakes.py` provides `InMemoryHistory`; the API tests
+(`tests/api/test_history.py`, moved from `tests/db/test_chat_history.py`) use it with
+`InMemorySaver`, including rebuild/durability, archive-outside-context, and delete. The
+Playwright server (`tests/frontend_server.py`) uses the same in-memory stores, so it no longer
+creates a schema or needs a database. `tests/db/` holds a contract suite run against both the
+fake and `SqlHistory`, plus Postgres-only audit/cascade tests and the checkpointer test; they
+build a throwaway schema with `alembic upgrade head` and skip when `ARGUS_TEST_DATABASE_URL`
+is unreachable (`postgres_url` fixture). The old `db_pool` fixture and `tests/db/test_repo.py`
+are gone.
+
+**Verified.** Without any database: 141 passed, 9 skipped (the Postgres-only cases). Against
+a scratch Postgres database: all 14 `tests/db` tests pass and the temporary schemas were
+dropped. Playwright (Chromium installed to `~/.cache`): 7 of 7 pass, including new tests for
+delete and for sidebar collapse persistence. Screenshots of the expanded sidebar, delete
+confirmation, and collapsed rail were reviewed. Also restyled the message input from
+CopilotKit's hard-coded grey to the palette. `task frontend:test` needs Chromium only.
+
+### Phoenix cost: patched image — 2026-09-19
+
+Question: can Phoenix show OpenRouter's cost? Findings on Phoenix 20.14.0 (read from the
+running container): no config option exists; cost is computed by a server-side daemon
+(`span_cost_calculator`) from token counts times its own price table, matched by regex on
+`llm.model_name`; nothing reads `llm.cost.*` from a span. OpenRouter model ids such as
+`anthropic/claude-sonnet-4.5` match no built-in entry (`claude-sonnet-4-5` does), and
+OpenRouter reports the real charge as `usage.cost` on every response. Upstream request, open:
+https://github.com/Arize-ai/phoenix/issues/15240 (the user asked its author about a PR and
+will submit one if they do not).
+
+Change: new `phoenix/` directory with `Dockerfile` and `reported-cost.patch`. The image is
+stock `arizephoenix/phoenix:version-20.14.0` (same digest as `latest` at the time) with one
+file replaced. The patch is a unified diff with `src/phoenix/...` paths, so it can be applied
+to the upstream repo as well. It adds `apply_reported_cost` to `SpanCostCalculator`: reported
+`llm.cost.prompt` / `llm.cost.completion` are applied to their side's details, a lone
+`llm.cost.total` is spread over all details weighted by the computed cost (when a model
+matched) or by token counts (when not), and a total plus one side derives the other. Because
+the base image has no shell or patch tool, the Dockerfile applies the patch in an Alpine stage
+and copies the result over the file; a Phoenix version that changed that file fails the build.
+`docker-compose.yml` builds the `phoenix` service from `./phoenix` as `argus-phoenix:local`,
+and `deps:up` now passes `--build`. The Phoenix container's data is not on a volume, so
+recreating it clears existing traces.
+
+Verified against the running container. Control on stock Phoenix: a span with
+`llm.cost.total=0.0123` and an unmatched model stored `total_cost` NULL. On the patched image:
+total only, unmatched model: total 0.0123 (split 0.01025/0.00205 by token counts); prompt and
+completion given: 0.003/0.009, total 0.012; matched model with a reported total of 0.05: total
+0.05 (split 50/50 because the computed prompt and completion costs were equal); no reported
+cost: unchanged price-table result of 0.006. Test projects were deleted afterwards.
+
+Not done: argus does not yet write `llm.cost.*` onto its spans, so real runs still show no
+cost. That needs `usage.cost` from the OpenRouter response copied onto the LLM span (the
+LangChain instrumentor does not map it), and a real call to confirm where it appears in the
+response. For a total-only report the prompt/completion split is an estimate; the total is exact.
+
+### argus reports OpenRouter cost on its spans — 2026-09-19
+
+Finding: OpenRouter's `usage.cost` already survives into LangChain for a non-streaming call
+(`response_metadata["token_usage"]["cost"]`, and `llm_output.token_usage`), but not for a
+streamed one: `langchain-openai`'s `_convert_chunk_to_generation_chunk` keeps only token counts
+from the final usage chunk, and the agent streams. The OpenInference LangChain instrumentor
+(0.1.76) has no cost handling at all, and neither does Arize's OpenAI instrumentor, so
+swapping instrumentors would not help. OpenTelemetry's GenAI conventions define no cost
+attribute yet (proposals `gen_ai.usage.cost.*` are open in `semantic-conventions-genai`);
+OpenInference's `llm.cost.*` is what Phoenix consumes.
+
+Change: `src/argus/agent/model.py` adds `CostReportingChatOpenAI`, a `ChatOpenAI` subclass that
+puts a streamed chunk's `usage.cost` back on the message's `response_metadata.token_usage`;
+`graph._build_model` uses it. `src/argus/agent/tracing.py` adds `reported_cost(outputs)` (reads
+`llm_output.token_usage` or the generation message metadata, accepts only a finite non-negative
+number, and treats `0.0` as a real cost) and `_report_provider_cost()`, which wraps the
+instrumentor's private `_update_span` (idempotent) so LLM spans get `llm.cost.total`. It is
+installed by `setup_tracing` and errors in it are swallowed like the rest of tracing.
+`reported_cost` is written to be lifted into an upstream instrumentor PR (to be filed by the
+user, as with Phoenix #15240); the subclass would belong in `langchain-openai`.
+
+Tests: `tests/agent/test_reported_cost.py`, hermetic via `httpx.MockTransport` (a fake gateway
+serving JSON and SSE), covers streamed message metadata, spans for non-streaming and streaming
+calls, a free call reporting `0.0`, no cost leaving the attribute absent, single wrapping, and
+the number-validation cases. Disabling the subclass makes the two streaming tests fail.
+Verified end to end with argus's own `setup_tracing`, `_build_model`, an OpenRouter-style stub,
+and the patched Phoenix: the non-streaming and streamed spans each stored `total_cost` 0.0123
+(split 0.01025/0.00205 by token counts, as the patch does for a lone total) for a model the
+price table does not know. The probe project was deleted. Not done: a real OpenRouter call, so
+the response shape is from OpenRouter's usage-accounting docs and a stub, and a full agent
+run through the UI.
+
+Added `docs/tracing.md`, a standalone guide to tracing: configuration, what is captured, the
+cost pipeline and the upstream gaps behind each workaround, the patched Phoenix image, how to
+check it, troubleshooting, and upgrade notes. Linked from the README and AGENTS.md.
+
+### Agent autoreload — 2026-09-19
+
+The `agent` process in `mprocs.yaml` now runs `uv run watchfiles 'argus serve --config
+examples/argus.dev.yaml' src examples/argus.dev.yaml`, so it restarts when Python under `src/`
+or the dev config changes. `uvicorn --reload` was not an option: it needs an importable app
+object, and `argus serve` builds its app after opening the database and checkpointer.
+`watchfiles>=1.0` is now declared in the `dev` extra (it was installed but undeclared) and
+`uv.lock` was refreshed. Verified on a scratch port outside mprocs: touching a source file and
+touching the config each restarted the server (new pid, health OK), and stopping the watcher
+left no process or listener behind. Restarting cuts off an in-flight chat stream; approvals
+survive because checkpoints are in Postgres. mprocs itself was not run, and a restart still
+works by hand with `r`. README, AGENTS.md, the live test plan, and `docs/tracing.md` were
+updated.
+
+### `argus serve` replaced by an ASGI app factory — 2026-09-19
+
+The `serve` command is gone. The server is now `uvicorn argus.api.app:create_app --factory`,
+with the config path in `ARGUS_CONFIG` (set once in the Taskfile's top-level `env`, and as an
+`ENV` in the Dockerfile, whose `ENTRYPOINT` is now uvicorn). `argus` remains as the
+`breakglass` command group only.
+
+How it works: `create_app()` (in `argus/api/app.py`) loads the config, calls `setup_tracing`,
+and builds the app over a not-yet-open Postgres pool (`db.checkpointer.make_checkpointer`) and a
+lazy SQLAlchemy engine. `build_app` gained a `resources` async context manager, and its
+lifespan now enters that and FastMCP's lifespan through an `AsyncExitStack`. The resources
+open the pool, run the idempotent `checkpointer.setup()`, and on shutdown close the pool and
+dispose the engine. `build_app` keeps its signature for tests. `AsyncPostgresSaver` captures
+the running event loop when constructed, so the factory must be called inside one; uvicorn does
+call it from within its serving loop, and the test helper `call_like_uvicorn` does the same.
+The checkpointer now uses a connection pool instead of one connection.
+
+Development: `task backend:dev` and the mprocs `agent` process run the same command with
+`--reload --reload-dir src --reload-dir examples --reload-include '*.yaml'`, replacing the
+`watchfiles` wrapper. `watchfiles` stays in the `dev` extra so uvicorn's reload is event-driven.
+Tests: the `serve` test was removed and `tests/api/test_factory.py` covers the missing-config
+error, building without touching the database, and resources opening on startup and closing on
+shutdown. The docs no longer mention `argus serve`.
+
+Verified: 158 passed, 9 skipped (Postgres-only); 7/7 Playwright; and a real uvicorn run of the
+exact mprocs command on a scratch port against the dev Postgres: `/agent/health` OK,
+`/api/threads` 200, a reload on a source change and on a config change, and a clean shutdown
+("Application shutdown complete", no listener left). Not done: a full `docker build` of the
+image (only `docker buildx build --check`), and a run through mprocs itself.
+
+### `argus` CLI removed — 2026-09-19
+
+Deleted `src/argus/cli.py`, its tests (`tests/test_cli.py`), the `argus` script entry in
+`pyproject.toml`, the `backend:breakglass:list` task, and the now-unused `click` dependency
+(`uv.lock` refreshed). The CLI only wrapped `argus breakglass list|approve|deny` over the
+sqlite store, and its `approve` merely flipped a status without launching anything; the
+designed path is the `/breakglass` web view (with the optional host launcher). The separate
+`argus-breakglass-launch` script (`argus.host_launch`) is untouched. The one behaviour the CLI
+tests covered that the store tests did not, denying a request, now has a store test. README,
+AGENTS.md, `examples/argus.example.yaml`, the Dockerfile, and the break-glass provider
+docstrings no longer mention the CLI. Verified: 149 passed, 9 skipped (Postgres-only), lint
+clean, `docker buildx build --check` clean, imports resolve.
+
+### Break-glass live checks planned; generative UI recorded — 2026-09-19
+
+Added a "Break-glass check" section to `docs/LIVE_TEST_PLAN.md`: setup (an
+`ARGUS_MCP_TOKEN`, the `breakglass` provider block, restarting `task dev` because Task reads
+`.env` once), a helper to file a request as an MCP client and one to read the sqlite store
+(the CLI is gone), a table of checks (token gate, login gate, admin creation, the agent being
+unable to file, filing, deny, approve without a launcher, decisions needing a login, restart
+persistence, optional ntfy push and push failure), and a launcher table that needs the host
+setup from the README (link visibility, approve launches, launch failure reported, forced key
+limits, TTL, not agent-reachable). The launcher checks are unexercised.
+
+Before writing it, the web and MCP path was scripted once on a scratch server (port 8431, a
+temporary config and sqlite file, a throwaway token) so the steps match the code: `/mcp`
+without a token returned 401; `/breakglass` logged out redirected to `/login`; the first
+`/login` created the account (`admin`) and showed a 24-character password once, a wrong password
+was rejected and the right one set a session cookie, and a second `/login` no longer showed
+it; the only MCP tool listed was `request_break_glass`; two filed requests appeared on
+`/breakglass` with Approve and Deny; approving one and denying the other were recorded in the
+store and cleared them from the page; an unknown id returned 404; and a logged-out decision
+redirected to `/login` and changed nothing. Not exercised: the ntfy push, the launcher and SSH,
+the agent-cannot-file check in a real chat, and restart persistence. Whoever opens `/login`
+first on a fresh store becomes the admin, which the plan now states.
+
+Also recorded the generative UI item under "Not started" and removed A2UI from the out-of-scope
+list (see above).

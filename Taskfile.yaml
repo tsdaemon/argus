@@ -2,63 +2,106 @@ version: "3"
 
 dotenv: [".env"]
 
+env:
+  ARGUS_AGENT_DATABASE_URL: "postgresql://argus:{{.POSTGRES_PASSWORD}}@127.0.0.1:5432/argus"
+  ARGUS_CONFIG: examples/argus.dev.yaml
+
 tasks:
+  # --- Project workflows ---
+
   install:
     desc: Install dependencies (incl. dev tools) into a local venv via uv.
     cmds:
-      - uv sync --extra dev
+      - task: backend:install
+      - task: frontend:install
+
+  dev:
+    desc: Start dependencies, migrate, and run local Argus + Vite under mprocs.
+    preconditions:
+      - sh: command -v mprocs
+        msg: Install mprocs before running task dev.
+    cmds:
+      - task: deps:up
+      - task: backend:migrate
+      - mprocs
 
   test:
     desc: Run the test suite.
     cmds:
-      - uv run pytest
+      - task: backend:test
+      - task: frontend:test
 
   lint:
-    desc: Lint with ruff.
+    desc: Lint the project.
+    cmds:
+      - task: backend:lint
+
+  # --- Dependencies ---
+
+  deps:up:
+    desc: Start Postgres, Phoenix, and Docker canaries; run Argus locally with task backend:dev.
+    cmds:
+      - docker compose --profile test up -d --build --wait
+
+  deps:down:
+    desc: Stop the local dependencies and canaries, preserving their data.
+    cmds:
+      - docker compose --profile test stop
+
+  # --- Backend ---
+
+  backend:install:
+    desc: Install the backend dependencies into a local venv via uv.
+    cmds:
+      - uv sync --extra dev
+
+  backend:dev:
+    desc: Run argus locally on 127.0.0.1:8421, reloading on changes (needs deps:up, migrate, and OPENROUTER_API_KEY in .env).
+    cmds:
+      - uv run uvicorn argus.api.app:create_app --factory --port 8421 --reload --reload-dir src --reload-dir examples --reload-include '*.yaml'
+
+  backend:lint:
+    desc: Lint the backend with ruff.
     cmds:
       - uv run ruff check src tests
 
-  precommit:install:
-    desc: Install the pre-commit git hook (once, per clone).
+  backend:test:
+    desc: Run the test suite.
     cmds:
-      - uv run pre-commit install
+      - uv run pytest
 
-  precommit:run:
-    desc: Run all pre-commit hooks against the whole repo.
-    cmds:
-      - uv run pre-commit run --all-files
-
-  postgres:up:
-    desc: Start just Postgres for local agent dev (needs POSTGRES_PASSWORD in .env).
-    cmds:
-      - docker compose up -d postgres
-
-  migrate:
+  backend:migrate:
     desc: Apply Argus-owned Postgres migrations (threads/runs/messages/tool_calls/approvals).
-    env:
-      ARGUS_AGENT_DATABASE_URL: "postgresql://argus:{{.POSTGRES_PASSWORD}}@localhost:5432/argus"
     cmds:
       - uv run alembic upgrade head
 
-  agent:serve:
-    desc: Run Argus Agent locally (needs postgres:up + migrate first, OPENROUTER_API_KEY in .env).
-    cmds:
-      - uv run argus agent serve --config examples/argus.example.yaml
+  # --- Frontend ---
 
-  mcp:run:
-    desc: Run just the MCP server over stdio, no agent (no network exposure, no token needed).
+  frontend:install:
+    desc: Install the pinned CopilotKit/React frontend dependencies (Node 24).
+    dir: frontend
     cmds:
-      - uv run argus serve --config examples/argus.example.yaml --transport stdio
+      - npm ci
 
-  mcp:serve:
-    desc: Run just the MCP server over HTTP, no agent (needs ARGUS_MCP_TOKEN in .env).
+  frontend:dev:
+    desc: Run Vite locally; proxies the API to the agent on port 8421.
+    dir: frontend
     cmds:
-      - uv run argus serve --config examples/argus.example.yaml
+      - npm run dev
 
-  breakglass:list:
-    desc: List break-glass requests in the local example config's store.
+  frontend:build:
+    desc: Build the web UI served at / by the agent.
+    dir: frontend
     cmds:
-      - uv run argus breakglass list --config examples/argus.example.yaml
+      - npm run build
+
+  frontend:test:
+    desc: Browser integration tests against in-memory stores (requires Playwright Chromium).
+    dir: frontend
+    cmds:
+      - npm test
+
+  # --- Docker ---
 
   docker:build:
     desc: Build the Argus image.
@@ -68,38 +111,37 @@ tasks:
   docker:up:
     desc: Run the full Argus stack (agent + Postgres + Phoenix) via docker compose (needs .env — see .env.example).
     cmds:
-      - docker compose up -d --build
+      - docker compose --profile app up -d --build
 
   docker:down:
     desc: Stop the docker compose stack.
     cmds:
-      - docker compose down
+      - docker compose --profile app down
 
   docker:logs:
     desc: Follow the argus service's logs.
     cmds:
       - docker compose logs -f argus
 
-  # --- theseus deployment (see the homelab-compose-deploy skill / README) -----------
-  # Needs docker-compose.deploy.yml (gitignored — copy docker-compose.deploy.yml.example)
-  # and .env.deploy (gitignored — copy .env.deploy.example) to exist first.
+  # --- Theseus deployment ---
+  # Requires docker-compose.deploy.yml and .env.deploy; copy their .example templates.
 
   deploy:
     desc: Deploy to theseus.
     dotenv: [".env.deploy"]
     cmds:
-      - docker --context theseus compose -f docker-compose.yml -f docker-compose.deploy.yml
+      - docker --context theseus compose --profile app -f docker-compose.yml -f docker-compose.deploy.yml
         up -d --build
 
   deploy:down:
     desc: Stop Argus on theseus.
     dotenv: [".env.deploy"]
     cmds:
-      - docker --context theseus compose -f docker-compose.yml -f docker-compose.deploy.yml down
+      - docker --context theseus compose --profile app -f docker-compose.yml -f docker-compose.deploy.yml down
 
   deploy:logs:
     desc: Follow Argus's logs on theseus.
     dotenv: [".env.deploy"]
     cmds:
-      - docker --context theseus compose -f docker-compose.yml -f docker-compose.deploy.yml
+      - docker --context theseus compose --profile app -f docker-compose.yml -f docker-compose.deploy.yml
         logs -f

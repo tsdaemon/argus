@@ -1,6 +1,7 @@
 __pycache__/
 *.pyc
 .venv/
+.argus/
 .env
 .env.deploy
 *.local.yaml
@@ -16,3 +17,7 @@ build/
 # deliberately kept out of this generic repo. Copy docker-compose.deploy.yml.example
 # to get started.
 docker-compose.deploy.yml
+
+node_modules/
+frontend/test-results/
+frontend/playwright-report/

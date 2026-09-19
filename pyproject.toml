@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "argus"
 version = "0.1.0"
-description = "Self-hosted LangGraph agent harness for home infrastructure, plus the policy-gated MCP server it's built on — no raw shell access handed to either."
+description = "Self-hosted home infrastructure agent with chat and optional policy-gated MCP interfaces."
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.11"
@@ -14,8 +14,8 @@ dependencies = [
     "ag-ui-langgraph>=0.0.45",
     "ag-ui-protocol>=0.1.22",
     "alembic>=1.20.0",
+    "sqlalchemy>=2.0",
     "arize-phoenix-otel>=0.17.1",
-    "click>=8.5.0",
     "deepagents>=0.7.14",
     "docker>=7",
     "fastapi>=0.141.1",
@@ -38,9 +38,8 @@ dependencies = [
 Homepage = "https://github.com/tsdaemon/argus"
 
 [project.scripts]
-argus = "argus.cli:main"
 # Deployed on the host that runs escalated sessions, wired up as a forced SSH command —
-# not run as part of `argus serve`. See the README's break-glass section.
+# not run by the server. See the README's break-glass section.
 argus-breakglass-launch = "argus.host_launch:main"
 
 [project.optional-dependencies]
@@ -51,6 +50,7 @@ dev = [
     "pytest-asyncio>=0.24",
     "pytest-mock>=3",
     "ruff>=0.6",
+    "watchfiles>=1.0",  # makes uvicorn --reload event-driven
 ]
 
 [tool.hatch.build.targets.wheel]

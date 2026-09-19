@@ -8,7 +8,7 @@ needs to live in a URL, so links here carry none.
 
 `add_breakglass_routes` mounts these routes onto any Starlette-compatible app — in
 practice, the same app FastMCP's `http_app()` returns for `/mcp`, so the whole thing
-runs as one process/port (`argus serve`).
+runs as one process/port (the `create_app` server).
 """
 
 from __future__ import annotations
@@ -148,7 +148,7 @@ def add_breakglass_routes(
 def create_app(
     store: BreakGlassStore, admin_store: AdminUserStore, launcher: HostLauncher | None = None
 ) -> Starlette:
-    """A bare Starlette app carrying only the break-glass routes. Handy standalone (e.g.
+    """A bare Starlette app carrying only the break-glass routes. Used in isolation (e.g.
     for tests); in a real deployment these routes are mounted onto the MCP app instead
     (see `argus.mcp.server.build_http_app`) so the whole thing is one process/port."""
     app = Starlette()

@@ -34,6 +34,15 @@ def test_list_filters_by_status(store: BreakGlassStore):
     assert [r.id for r in approved] == [a.id]
 
 
+def test_denying_a_request_records_the_decision(store: BreakGlassStore):
+    request = store.create(reason="r", target_host="h", evidence="e", proposed_objective="p")
+
+    store.set_status(request.id, DENIED)
+
+    assert store.get(request.id).status == DENIED
+    assert store.list(status=PENDING) == []
+
+
 def test_set_status_unknown_id_raises(store: BreakGlassStore):
     with pytest.raises(KeyError):
         store.set_status("doesnotexist", DENIED)

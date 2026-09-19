@@ -2,7 +2,7 @@
 # kept out of this generic repo on purpose) and fill in the placeholders.
 #
 # Deploy with:
-#   docker --context theseus compose -f docker-compose.yml -f docker-compose.deploy.yml \
+#   docker --context theseus compose --profile app -f docker-compose.yml -f docker-compose.deploy.yml \
 #     up -d --build
 # (wrapped as `task deploy` — see Taskfile.yaml, dotenv: ['.env.deploy']).
 
@@ -31,7 +31,7 @@ services:
       # with. No token in this URL — /breakglass is its own login (generated admin
       # account, first visit to /login shows the password once).
       homepage.href: "http://${APP_HOSTNAME_LOCAL}/breakglass"
-      homepage.description: NAS/network ops agent + MCP server
+      homepage.description: Home infrastructure agent with chat and MCP interfaces
     # Dev-only host publish isn't needed once Traefik can reach the container
     # directly over the Docker network.
     ports: !reset []

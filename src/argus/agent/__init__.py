@@ -9,9 +9,8 @@ MCP hop. Also owns the agent's private workspace (Markdown memory + skills) via
 `deepagents`' `FilesystemMiddleware`/`SkillsMiddleware`; those are deliberately never
 exposed over MCP, since that would let any MCP client mutate the agent's own memory.
 
-LangGraph/deepagents/etc. are base dependencies now — not an optional extra — but shared
-top-level modules still never import from here, and `argus.cli` still lazy-imports this
-package inside the relevant command, so `argus serve`'s own startup stays light.
+Shared top-level modules never import from here. `argus.api` composes the agent,
+persistence, and HTTP interfaces into the single application.
 """
 
 from __future__ import annotations

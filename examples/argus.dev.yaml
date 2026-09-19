@@ -1,0 +1,25 @@
+# Argus runs on your machine; Postgres/Phoenix/Docker canaries run in Compose.
+# task backend:dev supplies the local database URL and loads .env.
+providers:
+  docker:
+    enabled: true
+    socket: unix:///var/run/docker.sock
+    allowed_containers:
+      - argus-live-a
+      - argus-live-b
+
+policy:
+  default_mutate: require_approval
+  default_destructive: deny
+  overrides: {}
+
+agent:
+  workspace_root: ./.argus/workspace
+  database_url: ${ARGUS_AGENT_DATABASE_URL}
+  api_key: ${OPENROUTER_API_KEY}
+  model_base_url: https://openrouter.ai/api/v1
+  model: anthropic/claude-sonnet-4.5
+  worker_model: anthropic/claude-haiku-4.5
+  otel:
+    enabled: true
+    endpoint: http://127.0.0.1:6006/v1/traces

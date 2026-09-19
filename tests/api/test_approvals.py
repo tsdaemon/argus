@@ -64,7 +64,15 @@ def restart_call(name: str = "example-service") -> dict:
 
 @pytest.fixture
 def approval_app(tmp_path, monkeypatch):
-    def create(*, delegated=False, mcp=False, calls=None, worker_count=1, checkpointer=None):
+    def create(
+        *,
+        delegated=False,
+        mcp=False,
+        calls=None,
+        worker_count=1,
+        checkpointer=None,
+        history=None,
+    ):
         if mcp:
             monkeypatch.setenv("ARGUS_MCP_TOKEN", "test-token")
         else:
@@ -105,7 +113,7 @@ def approval_app(tmp_path, monkeypatch):
             },
             agent=AgentConfig(workspace_root=str(tmp_path / "workspace")),
         )
-        return build_app(config, checkpointer or InMemorySaver()), docker_client
+        return build_app(config, checkpointer or InMemorySaver(), history), docker_client
 
     return create
 

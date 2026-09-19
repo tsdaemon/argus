@@ -19,8 +19,8 @@ providers:
   # --- Break-glass: the unattended-run escape hatch --------------------------------
   breakglass:
     enabled: true
-    # Where the sqlite request store lives. Shared by the /breakglass web view (mounted
-    # on the same argus serve process, see README) and the `argus breakglass` CLI.
+    # Where the sqlite request store lives, used by the /breakglass web view (mounted on the
+    # same server process, see README).
     store_path: /var/lib/argus/breakglass.sqlite
     # Base URL of this deployment's own /breakglass page, used to build a clickable link
     # in the push notification below. Leave unset to skip the link.
@@ -45,9 +45,9 @@ providers:
     #   permission_mode: acceptEdits   # manual | acceptEdits | dontAsk | auto
     #   ttl_seconds: 14400              # kills the session after 4h regardless; optional
 
-# --- Agent: the LangGraph-based interactive harness (`argus agent serve`) ---------
-# Separate from the providers/policy above, which describe what the MCP server exposes
-# to external clients — the agent binds the same provider tools directly, in-process.
+# --- Agent: the LangGraph-based interactive harness (the `create_app` server) ---------
+# The agent invokes providers directly in-process. Its optional MCP interface exposes
+# those same provider tools to external clients, using the shared policy configuration.
 agent:
   # Directory the agent's Markdown memory (AGENTS.md, notes, skills) lives in.
   workspace_root: /var/lib/argus/agent-workspace

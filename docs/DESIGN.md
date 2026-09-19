@@ -9,15 +9,11 @@ Deliver a self-hosted agent harness for Theseus (the home NAS) that can run inte
 diagnostics, persist its execution/history, safely invoke constrained tools, expose
 traces, and provide a deliberately separate Claude Code break-glass path.
 
-Argus is not a greenfield agent application — it started as a standalone, policy-gated
-MCP server (`argus.mcp`, see the root `README.md`/`AGENTS.md`). This design evolves that
-codebase into the larger Argus system: **Argus Agent is the thing that always runs.**
-MCP is not a separate, independently-deployed pillar to preserve — it's an optional
-interface the always-running agent process can also expose (toggled by whether
-`ARGUS_MCP_TOKEN` is set, see [API / deployment shape](#api--deployment-shape)), for
-external MCP clients (Hermes, Claude Code) that want to talk to the same provider tools
-directly. `argus.mcp` stays a real, separately testable module because that boundary is
-useful internally, not because standalone MCP-only deployment is a goal.
+**Argus is one agent application, started with `uvicorn argus.api.app:create_app --factory`.** Chat/AG-UI and MCP are
+interfaces of that application. Setting `ARGUS_MCP_TOKEN` enables `/mcp` on the same
+process and port for external clients to call shared provider tools. The agent binds
+those tools directly in-process. MCP has no separate runtime, server command, or stdio
+mode; keep that invariant in code, tests, and documentation.
 
 **Design constraint that overrides all others below**: this stays a small, understandable
 harness for a single-operator homelab — not another Hermes/OpenClaw-sized platform. The
@@ -35,14 +31,13 @@ of hiding what's actually happening.
   to an MCP server. Builds the agent; doesn't serve it or own storage — those are
   siblings, not part of this package.
 - **Argus API** (`src/argus/api/`) — the FastAPI HTTP layer: routing, mounting MCP, the
-  one thing that runs (`argus agent serve`). The default `docker-compose.yml`/`Dockerfile`
-  ship it.
+  one thing that runs (`create_app`, an ASGI app factory). The default `docker-compose.yml`/`Dockerfile`
+  ship it, including the built React/CopilotKit frontend at `/`.
 - **Argus DB** (`src/argus/db/`) — Postgres persistence: LangGraph's own checkpoints
-  (`checkpointer.py`) and Argus-owned history tables (`repo.py`, schema via Alembic).
-- **Argus MCP** (`src/argus/mcp/`) — the pre-existing controlled interface to the
-  homelab/external systems (currently: `docker`), exposed as an *optional interface of
-  the same running agent process* (see [API / deployment shape](#api--deployment-shape)),
-  not a separate deployment.
+  (`checkpointer.py`) and Argus-owned history tables (SQLAlchemy models in `models.py`, a repository in `history.py`, schema via Alembic).
+- **MCP interface** (`src/argus/mcp/`) — optional HTTP access to the agent's shared
+  provider tools for external clients. `api/` mounts its FastMCP sub-app in the agent
+  application (see [API / deployment shape](#api--deployment-shape)).
 - **Shared** (`src/argus/policy.py`, `config.py`, `providers/`, `approval/` protocol,
   `launcher/`, `notify/`, `webauth.py`) — transport-agnostic code every other package
   depends on. None of `agent/`, `api/`, `db/`, `mcp/` depend on each other except where
@@ -131,7 +126,7 @@ subdirectory — the same shorthand the community `npx skills add owner/repo` to
 ([vercel-labs/skills](https://github.com/vercel-labs/skills),
 [antfu/skills-cli](https://github.com/antfu/skills-cli)) uses, so a skill shared as
 "install `owner/repo`" for that ecosystem installs into Argus the same way. Resolved
-at `argus agent serve` startup (idempotent — safe to re-run every boot, like the
+at server startup (idempotent — safe to re-run every boot, like the
 checkpointer's own `.setup()`): fetch the repo (no `npx`/Node dependency — a pure-Python
 fetch, e.g. GitHub's tarball/codeload endpoint or the contents API), find the matched
 `SKILL.md` (+ its directory), write into `workspace/skills/<name>/`. This is why
@@ -230,35 +225,57 @@ One Postgres instance, two categories of tables, never mixed:
   `checkpoint_migrations`) — created/managed entirely by `langgraph-checkpoint-postgres`
   (`AsyncPostgresSaver.setup()`), never hand-edited.
 - **Argus-owned** (`threads`, `runs`, `messages`, `tool_calls`, `approvals`) — schema via
-  **Alembic** (`alembic.ini` + `src/argus/db/migrations/`), plain functions over
-  them in `argus.db.repo` (no ORM, mirroring the existing sqlite `BreakGlassStore`
-  style). `alembic upgrade head` is a separate, explicit step — not run automatically at
+  **Alembic** (`alembic.ini` + `src/argus/db/migrations/`), modelled with SQLAlchemy
+  (`argus.db.models`) and reached only through the `HistoryRepository` interface in
+  `argus.db.history`, which `SqlHistory` implements and tests replace with an in-memory fake.
+  Foreign keys use `ON DELETE CASCADE` with matching ORM `cascade`/`passive_deletes`, so deleting
+  a thread removes its runs, messages, tool calls, and approvals in one statement. `alembic upgrade head` is a separate, explicit step — not run automatically at
   agent startup (unlike the LangGraph checkpointer's own `.setup()`, which is idempotent
   and safe to run every boot; schema migrations are not, by convention).
 
+Chat history is now wired into the API: `threads` indexes conversations by UUID with a
+title from their first user message and an activity timestamp; `messages` upserts AG-UI
+message snapshots by `(thread_id, agui_id)` in stable insertion order. Snapshot updates
+preserve older messages omitted by context summarization. This is a durable transcript,
+including tool calls/results carried in messages; separate `runs`, `tool_calls`, and
+`approvals` audit instrumentation remains unfinished.
+
+Reading a conversation combines that transcript with its current checkpoint and pending
+interrupts. It never invokes the graph. The frontend sends only the newest user message
+on a new turn (or no messages on an approval response), so restoring the visible archive
+does not put summarized history back into the model's working context. Checkpoints from
+before conversation indexing are not automatically added to the sidebar. History is
+retained from the point this instrumentation is enabled; earlier messages already removed
+by summarization cannot be recovered.
+
 ## API / deployment shape
 
-One process, `argus agent serve` (`src/argus/api/app.py`):
+One process, the `create_app` factory (`src/argus/api/app.py`), run by uvicorn:
 
-- `/agent` — AG-UI endpoint (`ag_ui_langgraph.LangGraphAgent` +
-  `add_langgraph_fastapi_endpoint`), the primary interface for the React frontend.
+- `/` + `/assets` — the built React/CopilotKit UI, served by FastAPI.
+- `/agent` — AG-UI endpoint using `ArgusAgent`; `api/chat.py` clones the adapter per
+  request and archives message snapshots while forwarding the stream.
 - `/agent/health` — plain health check.
-- `/mcp` + `/breakglass` (+ `/login`, `/launch`) — mounted from the exact same
-  `argus.mcp.server.build_http_app()` a standalone `argus serve` would use, **if**
-  `ARGUS_MCP_TOKEN` is set. The agent UI's break-glass action is a link to this existing
-  `/launch` page — not a second implementation.
+- `/api/threads` — paginated conversation listing and creation; `/api/threads/{id}`
+  returns metadata. `/api/threads/{id}/connect` replays messages and pending interrupts
+  as a read-only AG-UI stream for CopilotKit's chat lifecycle.
+- `/api/ui-config` — availability of the existing privileged-session web interface.
+- `/mcp` — optional interface, mounted when `ARGUS_MCP_TOKEN` is set. Its sub-app
+  adds `/breakglass`, `/login`, and `/launch` when the breakglass provider is configured.
+  The agent UI links to this existing `/launch` page when a launcher is available.
 
 Non-obvious ordering constraint (locked in by
-`tests/agent/test_api_app.py`): the AG-UI routes must be added to the FastAPI app
+`tests/api/test_app.py`): the AG-UI routes must be added to the FastAPI app
 *before* the MCP Starlette app is mounted at `/` — a root `Mount` can swallow a request
 that only partially matches an earlier route (right path, wrong method), and FastMCP's
 mounted app needs its own `lifespan` forwarded into the parent `FastAPI(...)`
 constructor or every `/mcp` request 500s (an internal task group never starts otherwise).
 
-Default `docker-compose.yml`/`Dockerfile` ship Postgres + Phoenix + the agent as one
-stack — not an opt-in overlay. LangGraph/deepagents/FastAPI/Postgres drivers are base
-`pyproject.toml` dependencies, not an optional extra — there's no "MCP-only install" to
-keep light for, since Argus Agent is the thing that always runs.
+Local development runs the server on the host (`task backend:dev`), with Postgres, Phoenix, and Docker
+canaries in Compose (`task deps:up`). The private workspace is `.argus/workspace`,
+visible to the operator as files change. The Dockerfile packages the same agent for
+deployment through Compose's `app` profile; it runs the same factory (`ARGUS_CONFIG=/config/argus.yaml`).
+LangGraph/deepagents/FastAPI/Postgres drivers are base `pyproject.toml` dependencies.
 
 ## Interfaces
 
@@ -266,10 +283,15 @@ Three real interfaces, all committed for v0, each with a distinct caller:
 
 - **AG-UI** — the human-facing interface, and the primary way to interact with Argus
   Agent. Backend: `/agent` (see [API / deployment shape](#api--deployment-shape)).
-  Frontend: a **React app** (not yet built — `frontend/`, see the ledger) using
-  `@ag-ui/client` to start/continue runs, stream agent/tool activity, and render the
-  HITL approve/reject flow from the native interrupt outcome (see
-  [Permissions/HITL](#permissionshitl)).
+  Frontend: **React + CopilotKit v2** (`frontend/`): `CopilotChat` renders chat/tool
+  activity; `useInterrupt` renders Argus's approve/reject cards and submits native
+  resume entries, including batches. A small `HttpAgent` subclass supplies read-only
+  history connection and limits each new turn to its newest user message.
+  Conversation navigation is application code over Argus's own Postgres API, following
+  CopilotKit's self-managed-persistence approach. There is no Copilot Cloud or separate
+  JavaScript runtime server. Direct agent registration uses the documented
+  `agents__unsafe_dev_only` hook; package versions are pinned and this integration must
+  be checked on upgrades. No Enterprise thread store is used.
 - **MCP** (`/mcp`) — the interface for existing MCP clients (Hermes, Claude Code) to
   call the same provider tools (`docker.*`) Argus Agent itself uses, bound via the
   MCP-facing side of [tool binding](#tool-binding-architecture) rather than the
@@ -285,4 +307,5 @@ Three real interfaces, all committed for v0, each with a distinct caller:
 OpenTelemetry + OpenInference → Phoenix (`arize-phoenix-otel`,
 `openinference-instrumentation-langchain`). Must never be on the correctness path —
 `AgentConfig.otel.enabled` defaults to `false`; a tracing setup failure must not break a
-run. **Not yet implemented** — see the ledger.
+run. Implemented in `argus.agent.tracing`: `setup_tracing` runs when the app is created and
+instruments LangChain/LangGraph, exporting in a background batch thread.

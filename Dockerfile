@@ -1,3 +1,10 @@
+FROM node:24-slim AS frontend
+WORKDIR /frontend
+COPY frontend/package.json frontend/package-lock.json ./
+RUN npm ci
+COPY frontend ./
+RUN npm run build
+
 FROM python:3.12-slim AS builder
 
 RUN pip install --no-cache-dir uv
@@ -19,12 +26,14 @@ WORKDIR /app
 COPY --from=builder /app/.venv /app/.venv
 COPY src ./src
 COPY alembic.ini ./
+COPY --from=frontend /frontend/dist ./src/argus/api/static
 ENV PATH="/app/.venv/bin:$PATH"
 
 # Runs as root by default: the docker provider needs to reach a socket mounted in
 # from the host, and container root is not host root. If you don't need the docker
 # provider, drop the socket mount and run as a non-root user instead.
 
+ENV ARGUS_CONFIG=/config/argus.yaml
 EXPOSE 8421
-ENTRYPOINT ["argus"]
-CMD ["agent", "serve", "--config", "/config/argus.yaml", "--host", "0.0.0.0", "--port", "8421"]
+ENTRYPOINT ["uvicorn", "argus.api.app:create_app", "--factory"]
+CMD ["--host", "0.0.0.0", "--port", "8421"]

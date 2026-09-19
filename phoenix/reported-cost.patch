@@ -1,0 +1,78 @@
+--- a/src/phoenix/server/daemons/span_cost_calculator.py
++++ b/src/phoenix/server/daemons/span_cost_calculator.py
+@@ -1,6 +1,7 @@
+ from __future__ import annotations
+
+ import logging
++import math
+ from asyncio import sleep
+ from collections import deque
+ from datetime import datetime
+@@ -12,12 +13,59 @@
+ from phoenix.server.cost_tracking.cost_details_calculator import SpanCostDetailsCalculator
+ from phoenix.server.daemons.generative_model_store import GenerativeModelStore
+ from phoenix.server.types import DaemonTask, DbSessionFactory
++from phoenix.trace.attributes import get_attribute_value
+
+ logger = logging.getLogger(__name__)
+
+ _GenerativeModelId: TypeAlias = int
+
+
++def _reported_cost(attributes: Mapping[str, Any], key: str) -> Optional[float]:
++    value = get_attribute_value(attributes, key)
++    if isinstance(value, bool) or not isinstance(value, (int, float)):
++        return None
++    return float(value) if math.isfinite(value) and value >= 0 else None
++
++
++def _spread(details: list[models.SpanCostDetail], amount: float) -> None:
++    """Split `amount` across `details`, weighted by computed cost, then tokens."""
++    if not details:
++        return
++    weights = [d.cost or 0.0 for d in details]
++    if not sum(weights):
++        weights = [float(d.tokens or 0) for d in details]
++    if not sum(weights):
++        weights = [1.0] * len(details)
++    for detail, weight in zip(details, weights):
++        detail.cost = amount * weight / sum(weights)
++        detail.cost_per_token = detail.cost / detail.tokens if detail.cost and detail.tokens else None
++
++
++def apply_reported_cost(details: list[models.SpanCostDetail], attributes: Mapping[str, Any]) -> None:
++    """Prefer cost reported on the span (`llm.cost.*`) over the price-table estimate.
++
++    Gateways such as OpenRouter and LiteLLM report what they actually charged. `prompt` and
++    `completion` are applied to their own details; a lone `total` is spread over all details,
++    weighted by the computed cost when a model matched and by token counts otherwise.
++
++    Requested upstream: https://github.com/Arize-ai/phoenix/issues/15240
++    """
++    prompt = _reported_cost(attributes, "llm.cost.prompt")
++    completion = _reported_cost(attributes, "llm.cost.completion")
++    total = _reported_cost(attributes, "llm.cost.total")
++    if total is not None and prompt is None and completion is None:
++        _spread(details, total)
++        return
++    if total is not None and prompt is None:
++        prompt = max(total - (completion or 0.0), 0.0)
++    if total is not None and completion is None:
++        completion = max(total - (prompt or 0.0), 0.0)
++    if prompt is not None:
++        _spread([d for d in details if d.is_prompt], prompt)
++    if completion is not None:
++        _spread([d for d in details if not d.is_prompt], completion)
++
++
+ class SpanCostCalculatorQueueItem(NamedTuple):
+     span_rowid: int
+     trace_rowid: int
+@@ -89,6 +137,7 @@
+         details = calculator.calculate_details(attributes)
+         if not details:
+             return None
++        apply_reported_cost(details, attributes)
+
+         cost = models.SpanCost(
+             model_id=cost_model.id if cost_model else None,

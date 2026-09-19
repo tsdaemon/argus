@@ -1,0 +1,6 @@
+procs:
+  agent:
+    # ARGUS_CONFIG comes from the Taskfile. Reloads on Python changes and dev-config edits.
+    shell: uv run uvicorn argus.api.app:create_app --factory --port 8421 --reload --reload-dir src --reload-dir examples --reload-include '*.yaml'
+  frontend:
+    shell: npm --prefix frontend run dev

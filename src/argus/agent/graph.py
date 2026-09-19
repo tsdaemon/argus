@@ -27,6 +27,7 @@ from langchain_openai import ChatOpenAI
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.graph.state import CompiledStateGraph
 
+from argus.agent.model import CostReportingChatOpenAI
 from argus.agent.tools import langchain_bind
 from argus.config import AgentConfig
 from argus.policy import PolicyEngine
@@ -58,7 +59,9 @@ register_harness_profile(
 
 
 def _build_model(config: AgentConfig, model_name: str) -> ChatOpenAI:
-    return ChatOpenAI(model=model_name, base_url=config.model_base_url, api_key=config.api_key)
+    return CostReportingChatOpenAI(
+        model=model_name, base_url=config.model_base_url, api_key=config.api_key
+    )
 
 
 def build_graph(

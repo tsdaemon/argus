@@ -1,15 +1,8 @@
-"""Auth for the network-reachable MCP endpoint.
+"""Bearer authentication for the agent's optional `/mcp` interface.
 
-Stdio transport is trusted by construction — only the process that spawned you can talk
-to you. HTTP transport is not: `/mcp` is now reachable by anything on the network, so it
-needs its own check, distinct from the break-glass web view's token (different audience:
-this one goes in a header from a machine — Hermes — the other goes in a URL a human
-bookmarks on a phone; a leaked phone bookmark should never compromise the agent control
-plane).
-
-This is a static shared-secret check, not OAuth — appropriate for a single-operator
-homelab on a private network. `fastmcp.server.auth.TokenVerifier` is the extension point
-FastMCP itself provides for exactly this "bearer token, no OAuth server" case.
+MCP clients send a static shared secret in the Authorization header. Break-glass
+web routes use a separate admin login and signed session cookie (`argus.webauth`).
+The MCP token does not protect the chat, history, or AG-UI routes.
 """
 
 from __future__ import annotations

@@ -18,7 +18,16 @@ if _database_url:
         "sqlalchemy.url", _database_url.replace("postgresql://", "postgresql+psycopg://")
     )
 
-target_metadata = None
+from argus.db.models import Base
+
+target_metadata = Base.metadata
+
+
+def include_object(obj, name, type_, reflected, compare_to) -> bool:
+    """LangGraph owns its checkpoint tables in this database; only manage Argus's own."""
+    if type_ == "table" and reflected:
+        return name in target_metadata.tables
+    return True
 
 
 def run_migrations_offline() -> None:
@@ -26,6 +35,7 @@ def run_migrations_offline() -> None:
     context.configure(
         url=url,
         target_metadata=target_metadata,
+        include_object=include_object,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
     )
@@ -43,7 +53,7 @@ def run_migrations_online() -> None:
 
     with connectable.connect() as connection:
         context.configure(
-            connection=connection, target_metadata=target_metadata
+            connection=connection, target_metadata=target_metadata, include_object=include_object
         )
 
         with context.begin_transaction():

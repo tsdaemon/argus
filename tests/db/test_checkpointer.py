@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import os
-
 import pytest
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage, BaseMessage
@@ -11,10 +9,6 @@ from argus.agent.graph import build_graph
 from argus.config import AgentConfig
 from argus.db.checkpointer import build_checkpointer
 from argus.policy import PolicyEngine
-
-TEST_DATABASE_URL = os.environ.get(
-    "ARGUS_TEST_DATABASE_URL", "postgresql://argus:testpass123@localhost:5432/argus"
-)
 
 
 class FakeToolCallingModel(BaseChatModel):
@@ -30,7 +24,9 @@ class FakeToolCallingModel(BaseChatModel):
     def bind_tools(self, tools, **kwargs):
         return self
 
-    def _generate(self, messages: list[BaseMessage], stop=None, run_manager=None, **kwargs) -> ChatResult:
+    def _generate(
+        self, messages: list[BaseMessage], stop=None, run_manager=None, **kwargs
+    ) -> ChatResult:
         return ChatResult(generations=[ChatGeneration(message=AIMessage(content=self.response))])
 
 
@@ -40,7 +36,7 @@ class AlwaysApprove:
 
 
 @pytest.mark.asyncio
-async def test_thread_state_persists_across_separate_graph_instances(tmp_path, db_pool):
+async def test_thread_state_persists_across_separate_graph_instances(tmp_path, postgres_url):
     """The whole point of a Postgres checkpointer: a *new* graph object (as a fresh
     process restart would create) resumes a thread's prior message history rather
     than starting cold, as long as it points at the same database and thread_id."""
@@ -48,7 +44,7 @@ async def test_thread_state_persists_across_separate_graph_instances(tmp_path, d
     policy = PolicyEngine(AlwaysApprove())
     thread_config = {"configurable": {"thread_id": "test-thread-1"}}
 
-    async with build_checkpointer(TEST_DATABASE_URL) as checkpointer:
+    async with build_checkpointer(postgres_url) as checkpointer:
         graph = build_graph(
             config=config,
             providers={},
@@ -61,7 +57,7 @@ async def test_thread_state_persists_across_separate_graph_instances(tmp_path, d
         await graph.ainvoke({"messages": [("user", "hello")]}, config=thread_config)
 
     # A fresh checkpointer + a fresh graph, as a real process restart would produce.
-    async with build_checkpointer(TEST_DATABASE_URL) as checkpointer:
+    async with build_checkpointer(postgres_url) as checkpointer:
         graph = build_graph(
             config=config,
             providers={},
