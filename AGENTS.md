@@ -104,8 +104,8 @@ and `/api/threads` currently have no application-level authentication; setting
 ## Decisions worth preserving
 
 - **OpenRouter for both models.** `ChatOpenAI` targets `agent.model_base_url` (OpenRouter by
-  default). `agent.model` defaults to `anthropic/claude-sonnet-4.5`; `agent.worker_model`
-  defaults to `anthropic/claude-haiku-4.5`. These are config values, not separate provider
+  default). `agent.model` defaults to `google/gemini-3.7-flash`; `agent.worker_model`
+  defaults to `stepfun/step-3.7-flash`. These are config values, not separate provider
   code paths. The harness-profile provider key is `openai` even for an Anthropic model
   accessed this way.
 - **One fixed worker.** The `task` tool delegates to the explicit `worker` `SubAgent`.

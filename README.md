@@ -206,7 +206,7 @@ short:
   through the agent or through `/mcp`.
 - `agent:` configures the LangGraph harness: `workspace_root` (the agent's private Markdown
   memory + skills), `database_url` (Postgres, checkpoints + history), `model` (an OpenRouter
-  `<provider>/<model>` id, e.g. `anthropic/claude-sonnet-4.5`), `api_key`
+  `<provider>/<model>` id, e.g. `google/gemini-3.7-flash`), `api_key`
   (`${OPENROUTER_API_KEY}`), and `otel:` (Phoenix tracing via `enabled`, `endpoint`, and `project_name`; off by default).
 
 `${ENV_VAR}` in any config value is expanded from the environment at load time, so tokens and

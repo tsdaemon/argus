@@ -56,8 +56,8 @@ class AgentConfig(BaseModel):
     # `${OPENROUTER_API_KEY}` in the YAML config, never hardcoded. `worker_model` is a
     # cheaper model for the "worker" subagent's routine/menial tool-calling delegation
     # — see `argus.agent.graph` — kept separate from `model` (planning/self-reflection).
-    model: str = "anthropic/claude-sonnet-4.5"
-    worker_model: str = "anthropic/claude-haiku-4.5"
+    model: str = "google/gemini-3.7-flash"
+    worker_model: str = "stepfun/step-3.7-flash"
     model_base_url: str = "https://openrouter.ai/api/v1"
     api_key: str = ""
     otel: OtelConfig = OtelConfig()

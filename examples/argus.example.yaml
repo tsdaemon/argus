@@ -56,7 +56,7 @@ agent:
   # Model access goes through OpenRouter — one API key routes to any upstream model, so
   # switching models is just this line, not a code change. See https://openrouter.ai/models
   # for the full `<provider>/<model>` id catalog.
-  model: anthropic/claude-sonnet-4.5
+  model: google/gemini-3.7-flash
   api_key: ${OPENROUTER_API_KEY}
   otel:
     enabled: false

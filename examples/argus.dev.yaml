@@ -18,8 +18,8 @@ agent:
   database_url: ${ARGUS_AGENT_DATABASE_URL}
   api_key: ${OPENROUTER_API_KEY}
   model_base_url: https://openrouter.ai/api/v1
-  model: anthropic/claude-sonnet-4.5
-  worker_model: anthropic/claude-haiku-4.5
+  model: google/gemini-3.7-flash
+  worker_model: stepfun/step-3.7-flash
   otel:
     enabled: true
     endpoint: http://127.0.0.1:6006/v1/traces

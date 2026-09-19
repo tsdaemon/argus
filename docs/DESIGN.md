@@ -139,7 +139,7 @@ a new system than hand-writing a new `Provider` class for each one. Not yet impl
 ## Model access
 
 Through **OpenRouter**, not a single native provider SDK — `AgentConfig.model` is
-OpenRouter's `<provider>/<model>` id (default: `anthropic/claude-sonnet-4.5`),
+OpenRouter's `<provider>/<model>` id (default: `google/gemini-3.7-flash`),
 `AgentConfig.api_key` set via `${OPENROUTER_API_KEY}`. One `ChatOpenAI` client (pointed
 at OpenRouter's endpoint) is used regardless of the upstream model — switching models is
 a config change, not a code change.
@@ -151,9 +151,9 @@ model (verified directly, locked in by
 harness-profile registration below is keyed `"openai"`, not `"anthropic"` or
 `"openrouter"`, for exactly this reason.
 
-**Two models, not one**: `AgentConfig.model` (default `anthropic/claude-sonnet-4.5`) runs
+**Two models, not one**: `AgentConfig.model` (default `google/gemini-3.7-flash`) runs
 the main agent — planning, synthesis, self-reflection, deciding whether an action needs
-approval. `AgentConfig.worker_model` (default `anthropic/claude-haiku-4.5`) runs one
+approval. `AgentConfig.worker_model` (default `stepfun/step-3.7-flash`) runs one
 fixed "worker" `SubAgent`, delegated to via the `task` tool for routine/read-heavy
 tool-calling work, to save cost. This is one purpose-built worker, not a generic
 pluggable multi-agent framework — deepagents' own default "general purpose subagent"
