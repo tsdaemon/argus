@@ -17,7 +17,7 @@ providers:
       type: ssh
       identity_file: ./.ssh/argus_launcher
       permission_mode: manual
-      ttl_seconds: 900
+      ttl_seconds: 3600
       hosts:
         theseus:
           host: 192.168.0.7
