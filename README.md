@@ -234,10 +234,11 @@ API keys never need to be committed.
 `network` (ping/probe a host).
 
 Also planned, but deliberately **not** a `Provider`/`/mcp` tool: read access to the
-user's Notion "Digital Home" inventory as a native knowledge source for the agent (see
-[`docs/DESIGN.md`](docs/DESIGN.md#trust-boundaries)) — read-only reference material,
-grouped with the agent's own memory/workspace rather than with MCP-facing operational
-tools, so no external MCP client gets to read it just because it can call `docker.*`.
+user's Notion "Digital Home" inventory as a native tool for the agent (see
+[`docs/DESIGN.md`](docs/DESIGN.md#trust-boundaries)) — read and write, without deletion and
+with every write logged, grouped with the agent's own memory/workspace rather than with
+MCP-facing operational tools, so no external MCP client gets to read it just because it can
+call `docker.*`.
 
 ## Approval
 

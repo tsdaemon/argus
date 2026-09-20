@@ -56,6 +56,30 @@ Temporal, unrestricted shell/root access (`execute` tool deliberately excluded).
 Additional sandbox runtimes are not part of v0; see [History](#history) for the OpenShell
 evaluation.
 
+## Next up, in order
+
+Agreed 2026-09-20. Each item gets its own design pass before it is built.
+
+1. **Notion** (above): small, needs no host access, and gives later items inventory context.
+2. **`prometheus` provider**: instant and range queries, active alerts, scrape targets, all
+   READ. SMART data is probably already scraped by a `prometheus-smartctl` exporter, which
+   would make a separate SMART provider unnecessary. To confirm: where Prometheus runs and
+   whether that exporter is scraped.
+3. **`journalctl` provider**: needs host access while argus runs in a container, so either a
+   read-only journal mount or a read-only forced-command script installed by autohome, in the
+   break-glass pattern. If logs already flow to Loki, a Loki provider replaces it.
+4. **Unattended runs, then scheduled jobs**: one run mode for callers with nobody to approve
+   (scheduled jobs and A2A alike), where a MUTATE tool fails closed and the run files a
+   break-glass request or a notification. Jobs are a Postgres table (schedule, prompt, allowed
+   tools) with an in-process scheduler, each run a normal thread in history. Needs the
+   severity-tiered notification design first. Scheduled health runs were out of scope for v0;
+   this changes that.
+5. **Generative UI (A2UI)**: dashboards from provider data, so after item 2. A fixed
+   catalog of read-only components the agent fills with data, so a rendered component can
+   never be a way around approval.
+6. **A2A interface**: a small endpoint on the same app with bearer auth like `/mcp`, calling the
+   agent in unattended mode.
+
 ## Not started
 
 - `[ ]` **Execution audit instrumentation**: chat indexing and `messages` snapshot
@@ -70,9 +94,29 @@ evaluation.
 - `[ ]` **Installing external skills** (`AgentConfig.skill_sources`, `owner/repo`
   shorthand) — design decided (see design doc's Workspace & skills section), not yet
   implemented.
-- `[ ]` **Notion as a knowledge source**: native, agent-only read access to the user's
-  "Digital Home" inventory. Never a `Provider`/`ToolSpec` or exposed over `/mcp`.
-  Authentication and the search/fetch tool shape are not yet designed or implemented.
+- `[ ]` **Notion as a native agent tool** (decided 2026-09-20, not built): read and write
+  access to the "Digital Home" hub through the raw Notion API, built as a `NotionMiddleware`
+  (a LangChain `AgentMiddleware`, passed to `create_deep_agent` beside the filesystem
+  middleware) since deepagents ships none and `langchain-notion` has no query or update. Native
+  to the agent like the workspace tools: no `Provider`/`ToolSpec`, no `PolicyEngine`, no
+  approval cards, never over `/mcp`. Its `wrap_tool_call` hook is the single place that
+  captures previous values, writes the audit record, and refuses deletion; a system-prompt
+  fragment carries the schema summary. Deletion is excluded in code (no delete, archive, or trash tool; the update tool
+  rejects `archived`, `in_trash`, and block removal), since an integration token cannot forbid
+  it by itself. Every write is logged to a Postgres table before it is sent, with the target,
+  the new values, and the previous ones so an edit can be undone; the table follows the
+  repository pattern with an in-memory fake. Tools: search, query a data source with a filter,
+  fetch a page as markdown, create a page, update a page. The token comes from an environment
+  variable, and the integration is shared with only the hub page. Open: check the current API
+  version and data-source endpoints before writing the client. Accepted risk: page text is
+  untrusted input and edits are not gated, so an injected instruction could cause a wrong
+  edit; the log and Notion's page history make it recoverable, not prevented.
+  Layout found in the workspace: three databases under the hub (Projects, Tasks, Inventory),
+  and Inventory has seven data sources (Hardware, Software, Systems, Signals, Repos,
+  Maintenance, Backups). Its `Signals` table (SEV1 to SEV3, channel, runbook) is a starting
+  point for the notification design below, `Maintenance` (frequency, last executed) for
+  scheduled jobs, and `Hardware` (IP, hostname, criticality) for break-glass hosts and
+  Prometheus targets. A workspace skill should describe the schema.
 - `[ ]` **Severity-tiered notifications** (SEV0 phone call, SEV1 ntfy, SEV2 email) — see
   design doc's new Notifications section. No telephony/email integration exists yet;
   what assigns a severity is undecided. Needs a design pass before implementing.

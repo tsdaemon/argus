@@ -90,8 +90,9 @@ LangChain tool names replace dots with underscores (`docker_restart_container`).
   declined/cancelled requests and catches `ToolError` to fail closed.
 - **Private workspace and skills** are native agent capabilities, outside operational
   policy gating and never exposed over MCP. They are the agent's own editable knowledge.
-  Planned read-only Notion access belongs here conceptually: an agent-only knowledge tool,
-  not a `Provider`/`ToolSpec` or a way for external MCP clients to read the user's inventory.
+  Planned Notion access (read and write, no delete, every write logged) belongs here
+  conceptually: an agent-only tool, not a `Provider`/`ToolSpec`, not policy-gated, and not a
+  way for external MCP clients to read the user's inventory.
 - **Break-glass** is separate. The agent and external MCP clients can file a request
   (`request_break_glass`, classified READ: it only records). No tool approves or launches a
   privileged session; a human uses the authenticated web routes. The agent gets the provider

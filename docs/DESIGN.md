@@ -57,13 +57,14 @@ of hiding what's actually happening.
   above. Provided by `deepagents`' `FilesystemMiddleware`/`SkillsMiddleware`/
   `MemoryMiddleware` (see [Workspace & skills](#workspace--skills)), always auto-run, never
   gated by `PolicyEngine`.
-- **Native external knowledge sources** (planned: Notion — see the ledger) — read-only
-  reference material the agent draws on, conceptually grouped with memory rather than
-  with MCP-facing tools even though the source itself isn't agent-owned. Not a
-  `Provider`/`ToolSpec`, never exposed over `/mcp`: there's no mutation risk to gate
-  (read-only) and no reason an external MCP client should be able to read the user's
-  Notion workspace just because it can call `docker.*`. A native, agent-only tool, same
-  treatment as the workspace above.
+- **Native external knowledge sources** (planned: Notion — see the ledger) — the user's
+  inventory, which the agent reads and keeps up to date, conceptually grouped with memory
+  rather than with MCP-facing tools even though the source itself isn't agent-owned. Not a
+  `Provider`/`ToolSpec`, never exposed over `/mcp`, not gated by `PolicyEngine`: there is no
+  reason an external MCP client should be able to read the user's Notion workspace just
+  because it can call `docker.*`. A native, agent-only tool, same treatment as the workspace
+  above, with two guards that replace approval: it has no way to delete, and every write is
+  logged with the previous values.
 - **Break-glass** — deliberately *outside* both boundaries above. A human action (from the
   Argus Agent UI or the existing `/breakglass`/`/launch` web view — the same page, not two
   implementations) that launches a real, unconstrained Claude Code session on the target
