@@ -67,8 +67,9 @@ of hiding what's actually happening.
 - **Break-glass** — deliberately *outside* both boundaries above. A human action (from the
   Argus Agent UI or the existing `/breakglass`/`/launch` web view — the same page, not two
   implementations) that launches a real, unconstrained Claude Code session on the target
-  host via `argus.launcher`. Never agent-invocable. `sudo` stays password-gated on the
-  target host; no `NOPASSWD`.
+  host via `argus.launcher`. Neither the launch nor the approval is agent-invocable; the agent can only file a request. `sudo` stays password-gated on the
+  target host; no `NOPASSWD`. Flows, trust model, and the planned multi-host install are in
+  [breakglass.md](breakglass.md).
 
 ## Concepts kept separate
 
@@ -97,7 +98,9 @@ consume the same specs:
   `HumanInTheLoopMiddleware`, not MCP elicitation. `DENY` means the tool never exists in
   either tool list, not just refused at call time — same invariant on both bindings.
 
-The `breakglass` provider is bound to MCP only, never to the agent (see Trust boundaries).
+The `breakglass` provider's one tool, `request_break_glass`, is bound to both: it is classified
+READ because it only records a request. Approving and launching are not tools on either binding;
+they are human web routes (see Trust boundaries).
 
 ## Workspace & skills
 
@@ -260,9 +263,11 @@ One process, the `create_app` factory (`src/argus/api/app.py`), run by uvicorn:
   returns metadata. `/api/threads/{id}/connect` replays messages and pending interrupts
   as a read-only AG-UI stream for CopilotKit's chat lifecycle.
 - `/api/ui-config` — availability of the existing privileged-session web interface.
-- `/mcp` — optional interface, mounted when `ARGUS_MCP_TOKEN` is set. Its sub-app
-  adds `/breakglass`, `/login`, and `/launch` when the breakglass provider is configured.
-  The agent UI links to this existing `/launch` page when a launcher is available.
+- `/mcp` — optional interface, mounted when `ARGUS_MCP_TOKEN` is set, guarded by that bearer
+  token. Its sub-app adds `/breakglass` and `/launch` when the breakglass provider is
+  configured. The agent UI links to this existing `/launch` page when a launcher is available.
+- **Access control** — one admin login (`argus.api.auth`) gates everything except `/mcp`,
+  `/login`, and `/agent/health`; the break-glass pages check the session again themselves.
 
 Non-obvious ordering constraint (locked in by
 `tests/api/test_app.py`): the AG-UI routes must be added to the FastAPI app

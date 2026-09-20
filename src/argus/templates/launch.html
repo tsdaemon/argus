@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% from "_macros.html" import host_picker %}
+{% block title %}argus: launch a session{% endblock %}
+{% block content %}
+<h1>Launch a session yourself</h1>
+<p>Starts the same host-side Claude Code session as approving a request would, seeded
+with whatever you write below — independent of any pending break-glass request.</p>
+<form method="post" action="/launch">
+  {{ host_picker(hosts) }}
+  <textarea name="context" placeholder="What do you want to investigate?" required></textarea>
+  <div class="actions">
+    <button class="primary" type="submit">Launch</button>
+  </div>
+</form>
+<p><a href="/breakglass">Back</a></p>
+{% endblock %}

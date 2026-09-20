@@ -57,10 +57,11 @@ are base dependencies in `pyproject.toml`.
 | Optional MCP sub-app assembly + bearer auth | `src/argus/mcp/server.py`, `src/argus/mcp/auth.py` |
 | Server factory `create_app` and its lifespan | `src/argus/api/app.py` |
 | Docker visibility and restart tools | `src/argus/providers/docker_provider.py` |
-| Break-glass provider + SQLite request store | `src/argus/providers/breakglass_provider.py` |
+| Break-glass provider; its Postgres repository | `src/argus/providers/breakglass_provider.py`, `src/argus/db/breakglass.py` |
 | Break-glass web routes + shared admin authentication | `src/argus/mcp/webapp.py`, `src/argus/webauth.py` |
+| argus's own HTML pages (login, break-glass): Jinja templates on one base | `src/argus/webpages.py`, `src/argus/templates/` |
 | ntfy push notifications | `src/argus/notify/` |
-| SSH launcher + separately deployed forced-command host script | `src/argus/launcher/ssh.py`, `src/argus/host_launch.py` |
+| SSH launcher (named hosts); the host-side script lives in autohome | `src/argus/launcher/ssh.py` |
 
 `agent/` builds the agent; `api/` serves it; `db/` owns persistence; `mcp/` exposes provider
 tools to external clients. `api/` composes these packages. `agent/` and `mcp/` share policy,
@@ -91,15 +92,17 @@ LangChain tool names replace dots with underscores (`docker_restart_container`).
   policy gating and never exposed over MCP. They are the agent's own editable knowledge.
   Planned read-only Notion access belongs here conceptually: an agent-only knowledge tool,
   not a `Provider`/`ToolSpec` or a way for external MCP clients to read the user's inventory.
-- **Break-glass** is separate. External MCP clients can file a request, but `breakglass` is
-  excluded when assembling the agent's provider tools. No agent tool approves or launches a
-  privileged session; a human uses the authenticated web routes. The React UI links to
+- **Break-glass** is separate. The agent and external MCP clients can file a request
+  (`request_break_glass`, classified READ: it only records). No tool approves or launches a
+  privileged session; a human uses the authenticated web routes. The agent gets the provider
+  only when `build_app` has a break-glass repository. The React UI links to
   the existing `/launch` page when enabled. Keep target-host sudo password-gated, with no NOPASSWD.
 
-Authentication is scoped per interface: the static bearer token protects `/mcp`, and the
-generated admin account/signed cookie protects the break-glass web flow. `/agent`, the UI,
-and `/api/threads` currently have no application-level authentication; setting
-`ARGUS_MCP_TOKEN` does not protect them.
+Authentication is scoped per interface: the static bearer token protects `/mcp`, and one
+admin account with a signed session cookie protects everything else (`argus.api.auth`, a gate
+added in `build_app` when an admin repository is supplied; `/login`, `/agent/health`, and
+`/mcp` stay open). The break-glass pages check the session again themselves. Tests that build
+the app without an admin repository get an open app on purpose.
 
 ## Decisions worth preserving
 
@@ -135,11 +138,12 @@ and `/api/threads` currently have no application-level authentication; setting
   can swallow requests, or MCP's internal task group never starts and requests fail.
   Regression coverage is in `tests/api/test_app.py`.
 - **Break-glass requests support unattended external runs.** A request records context in
-  SQLite and optionally sends an ntfy push linking to a phone-accessible approval page.
+  Postgres and optionally sends an ntfy push linking to a phone-accessible approval page.
   Argus's own scheduler is not built. A live user can answer normal tool approvals instead.
-- **Generated admin login, no URL secret.** First visit to `/login` provisions a password
-  and reveals it once; subsequent login uses a PBKDF2 hash and signed session cookie.
-  Keep login secrets out of URLs.
+- **One admin login, no URL secret.** First visit to `/login` creates the account: with
+  `ARGUS_ADMIN_PASSWORD` set it uses that (a deployment); otherwise it generates one and
+  reveals it once. Login uses a PBKDF2 hash and signed session cookie. The env var only
+  seeds; rotate by deleting the `admin_account` row. Keep login secrets out of URLs.
 - **Session launch uses a forced-command SSH key.** The key on the target host is restricted
   to `argus-breakglass-launch`. Docker's socket is for provider operations, not the session
   launcher. `allowed_containers` scopes provider calls when configured; the Theseus example
@@ -195,10 +199,12 @@ and `/api/threads` currently have no application-level authentication; setting
   `POSTGRES_PASSWORD` configures Compose's Postgres. The Taskfile's top-level `env`
   supplies the local database URL to every task, including mprocs's child processes.
 - `ARGUS_MCP_TOKEN` enables the optional `/mcp` interface of the server.
+- `ARGUS_ADMIN_PASSWORD` seeds the admin password on first `/login`; unset means a generated
+  one is shown once.
 - `ARGUS_NTFY_TOPIC_URL` is optional notification configuration. If a YAML string references
   `${ENV_VAR}`, that variable must exist (an empty value is allowed), or config loading fails.
-- `ARGUS_BREAKGLASS_SESSIONS_DIR` is read on the **target host** by `host_launch.py` and
-  defaults to `~/.argus/breakglass-sessions`.
+- `ARGUS_BREAKGLASS_SESSIONS_DIR` is read on the **target host** by the launcher script that
+  autohome installs, and defaults to `~/.argus/breakglass-sessions`.
 - `examples/argus.example.yaml` includes agent configuration. `examples/theseus.argus.yaml`
   currently covers providers/policy and has no `agent:` block; add the appropriate database,
   model credential, and workspace configuration before using it for an agent deployment.

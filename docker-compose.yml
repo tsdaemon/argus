@@ -12,14 +12,12 @@ services:
       - "${ARGUS_PORT:-8421}:8421"
     environment:
       ARGUS_MCP_TOKEN: ${ARGUS_MCP_TOKEN:-}
+      ARGUS_ADMIN_PASSWORD: ${ARGUS_ADMIN_PASSWORD:-}
       ARGUS_NTFY_TOPIC_URL: ${ARGUS_NTFY_TOPIC_URL:-}
       ARGUS_AGENT_DATABASE_URL: postgresql://argus:${POSTGRES_PASSWORD}@postgres:5432/argus
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
     volumes:
       - ${CONFIG_FILE:-./examples/argus.example.yaml}:/config/argus.yaml:ro
-      # Named volume, not a host bind mount, for the breakglass sqlite store — matches
-      # examples/argus.example.yaml's store_path (/var/lib/argus/...).
-      - argus-state:/var/lib/argus
       - argus-agent-workspace:/var/lib/argus/agent-workspace
       # Lets the docker provider talk to your daemon. Scope what it can see via
       # allowed_containers in the mounted config, not via this mount — a read-only
@@ -86,6 +84,5 @@ services:
       - "trap 'exit 0' TERM INT; while :; do echo argus-live-heartbeat; sleep 5; done"
 
 volumes:
-  argus-state:
   argus-agent-workspace:
   argus-pg-data:

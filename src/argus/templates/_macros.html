@@ -1,0 +1,12 @@
+{% macro host_picker(hosts, preselect=None, form=None) %}
+{# `form` ties the radios to a form elsewhere in the page, so the picker can sit on its own row. #}
+<fieldset class="hosts">
+  <legend class="label">Launch on</legend>
+  {% for h in hosts %}
+  <label class="pill">
+    <input type="radio" name="host" value="{{ h }}"{% if form %} form="{{ form }}"{% endif %}{% if h == preselect or (preselect not in hosts and loop.first) %} checked{% endif %} required>
+    <span>{{ h }}</span>
+  </label>
+  {% endfor %}
+</fieldset>
+{% endmacro %}

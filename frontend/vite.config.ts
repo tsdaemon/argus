@@ -5,7 +5,7 @@ export default defineConfig({
   plugins: [react()],
   server: {
     host: "127.0.0.1",
-    proxy: Object.fromEntries(["/agent", "/api", "/launch", "/login", "/breakglass"].map(
+    proxy: Object.fromEntries(["/agent", "/api", "/launch", "/login", "/logout", "/breakglass"].map(
       (path) => [path, "http://127.0.0.1:8421"],
     )),
   },

@@ -1,86 +1,69 @@
 from __future__ import annotations
 
-from pathlib import Path
+import asyncio
 
 import pytest
 from starlette.testclient import TestClient
 
-from argus.mcp.webapp import SESSION_COOKIE, create_app
-from argus.providers.breakglass_provider import APPROVED, PENDING, BreakGlassStore
-from argus.webauth import AdminUserStore
+from argus.db.breakglass import APPROVED, PENDING
+from argus.mcp.webapp import create_app
+from argus.webauth import SESSION_COOKIE, AdminAuth, sign_session
+from tests.fakes import InMemoryAdmin, InMemoryBreakGlass
+
+
+def run(coro):
+    """The repository is async and these tests are not; the fake is not tied to a loop."""
+    return asyncio.run(coro)
+
+
+def file_request(store, *, reason="r", target_host="h", evidence="e", objective="p"):
+    return run(
+        store.create_request(
+            reason=reason,
+            target_host=target_host,
+            evidence=evidence,
+            proposed_objective=objective,
+        )
+    )
 
 
 @pytest.fixture
-def store(tmp_path: Path) -> BreakGlassStore:
-    return BreakGlassStore(tmp_path / "breakglass.sqlite")
+def store() -> InMemoryBreakGlass:
+    return InMemoryBreakGlass()
 
 
 @pytest.fixture
-def admin_store(tmp_path: Path) -> AdminUserStore:
-    return AdminUserStore(tmp_path / "breakglass.sqlite")
+def admin() -> AdminAuth:
+    return AdminAuth(InMemoryAdmin())
 
 
 @pytest.fixture
-def client(store: BreakGlassStore, admin_store: AdminUserStore) -> TestClient:
-    return TestClient(create_app(store, admin_store))
+def client(store: InMemoryBreakGlass, admin: AdminAuth) -> TestClient:
+    return TestClient(create_app(store, admin))
 
 
-def _provision_and_login(client: TestClient, admin_store: AdminUserStore) -> None:
-    """Provisions the (one-time) admin account directly and logs the client in —
-    the plaintext password is only ever returned once, by get_or_create() itself."""
-    account, password = admin_store.get_or_create()
-    assert password is not None, "expected this call to be the one that creates the account"
-    resp = client.post("/login", data={"username": account.username, "password": password})
-    assert resp.status_code == 200
-
-
-def test_first_visit_to_login_creates_account_and_reveals_password(
-    client: TestClient, admin_store: AdminUserStore
-):
-    assert admin_store.get() is None
-
-    resp = client.get("/login")
-
-    assert resp.status_code == 200
-    account = admin_store.get()
-    assert account is not None
-    assert "Admin account created" in resp.text
-    assert "<script" not in resp.text
-
-
-def test_second_visit_to_login_does_not_regenerate_or_reveal(
-    client: TestClient, admin_store: AdminUserStore
-):
-    client.get("/login")
-    first_account = admin_store.get()
-
-    resp = client.get("/login")
-
-    assert "Admin account created" not in resp.text
-    assert admin_store.get() == first_account
+def _provision_and_login(client: TestClient, admin: AdminAuth) -> None:
+    """Creates the admin account directly and gives the client a valid session for it. The
+    login form itself belongs to `argus.api.auth` and is tested in tests/api/test_auth.py."""
+    account, _password = run(admin.get_or_create())
+    client.cookies.set(SESSION_COOKIE, sign_session(account.session_secret, account.username))
 
 
 def test_breakglass_without_session_redirects_to_login(client: TestClient):
-    resp = client.get("/breakglass")
-    assert resp.status_code == 200  # TestClient follows the redirect
-    assert resp.url.path == "/login"
+    resp = client.get("/breakglass", follow_redirects=False)
+
+    assert resp.status_code == 303
+    assert resp.headers["location"] == "/login"
 
 
-def test_wrong_password_does_not_authenticate(client: TestClient, admin_store: AdminUserStore):
-    account, _password = admin_store.get_or_create()
-
-    resp = client.post("/login", data={"username": account.username, "password": "not-it"})
-
-    assert resp.url.path == "/login"
-    assert "error" in str(resp.url.query)
-    assert SESSION_COOKIE not in client.cookies
-
-
-def test_correct_password_authenticates_and_lists_pending(
-    client: TestClient, store: BreakGlassStore, admin_store: AdminUserStore
+def test_pending_requests_are_listed_for_a_logged_in_admin(
+    client: TestClient, store: InMemoryBreakGlass, admin: AdminAuth
 ):
-    store.create(reason="pihole down", target_host="theseus", evidence="dig fails", proposed_objective="restart")
-    _provision_and_login(client, admin_store)
+    file_request(
+        store, reason="pihole down", target_host="theseus", evidence="dig fails",
+        objective="restart",
+    )
+    _provision_and_login(client, admin)
 
     resp = client.get("/breakglass")
 
@@ -90,148 +73,178 @@ def test_correct_password_authenticates_and_lists_pending(
     assert "<script" not in resp.text
 
 
-def test_logout_clears_session(client: TestClient, admin_store: AdminUserStore):
-    _provision_and_login(client, admin_store)
-    assert client.get("/breakglass").status_code == 200
-
-    client.post("/logout")
-
-    assert client.get("/breakglass").url.path == "/login"
-
-
 def test_approve_flips_status_and_removes_from_pending_list(
-    client: TestClient, store: BreakGlassStore, admin_store: AdminUserStore
+    client: TestClient, store: InMemoryBreakGlass, admin: AdminAuth
 ):
-    request = store.create(reason="r", target_host="h", evidence="e", proposed_objective="p")
-    _provision_and_login(client, admin_store)
+    request = file_request(store)
+    _provision_and_login(client, admin)
 
     resp = client.post(f"/breakglass/{request.id}/approve")
 
     assert resp.status_code == 200
-    assert store.get(request.id).status == APPROVED
-    assert store.list(status=PENDING) == []
+    assert run(store.get_request(request.id)).status == APPROVED
+    assert run(store.list_requests(status=PENDING)) == []
 
 
-def test_decide_without_session_redirects_to_login(client: TestClient, store: BreakGlassStore):
-    request = store.create(reason="r", target_host="h", evidence="e", proposed_objective="p")
+def test_decide_without_session_redirects_to_login(client: TestClient, store: InMemoryBreakGlass):
+    request = file_request(store)
 
-    resp = client.post(f"/breakglass/{request.id}/approve")
+    resp = client.post(f"/breakglass/{request.id}/approve", follow_redirects=False)
 
-    assert resp.url.path == "/login"
-    assert store.get(request.id).status == PENDING
+    assert resp.status_code == 303
+    assert resp.headers["location"] == "/login"
+    assert run(store.get_request(request.id)).status == PENDING
 
 
-def test_decide_on_unknown_id_returns_404(client: TestClient, admin_store: AdminUserStore):
-    _provision_and_login(client, admin_store)
+def test_decide_on_unknown_id_returns_404(client: TestClient, admin: AdminAuth):
+    _provision_and_login(client, admin)
     resp = client.post("/breakglass/doesnotexist/approve")
     assert resp.status_code == 404
 
 
-def test_deny_does_not_trigger_launcher(store: BreakGlassStore, admin_store: AdminUserStore):
+class FakeLauncher:
+    def __init__(self, *, hosts=("theseus", "eyes"), fail: bool = False) -> None:
+        self.hosts = list(hosts)
+        self.calls: list[dict] = []
+        self._fail = fail
+
+    async def launch(self, *, host: str, session_label: str, context_markdown: str) -> None:
+        self.calls.append(
+            {"host": host, "session_label": session_label, "context_markdown": context_markdown}
+        )
+        if self._fail:
+            raise RuntimeError("ssh exploded")
+
+
+def _client_with(store, admin, launcher) -> TestClient:
+    client = TestClient(create_app(store, admin, launcher))
+    _provision_and_login(client, admin)
+    return client
+
+
+def test_deny_does_not_trigger_launcher(store: InMemoryBreakGlass, admin: AdminAuth):
     launcher = FakeLauncher()
-    client = TestClient(create_app(store, admin_store, launcher))
-    _provision_and_login(client, admin_store)
-    request = store.create(reason="r", target_host="h", evidence="e", proposed_objective="p")
+    client = _client_with(store, admin, launcher)
+    request = file_request(store)
 
     client.post(f"/breakglass/{request.id}/deny")
 
     assert launcher.calls == []
 
 
-class FakeLauncher:
-    def __init__(self, *, fail: bool = False) -> None:
-        self.calls: list[dict] = []
-        self._fail = fail
-
-    async def launch(self, *, session_label: str, context_markdown: str) -> None:
-        self.calls.append({"session_label": session_label, "context_markdown": context_markdown})
-        if self._fail:
-            raise RuntimeError("ssh exploded")
-
-
-def test_approve_triggers_launcher_with_request_context(store: BreakGlassStore, admin_store: AdminUserStore):
+def test_approve_triggers_launcher_on_the_chosen_host(store: InMemoryBreakGlass, admin: AdminAuth):
     launcher = FakeLauncher()
-    client = TestClient(create_app(store, admin_store, launcher))
-    _provision_and_login(client, admin_store)
-    request = store.create(
-        reason="pihole down", target_host="theseus", evidence="dig fails", proposed_objective="restart"
+    client = _client_with(store, admin, launcher)
+    request = file_request(
+        store, reason="pihole down", target_host="theseus", evidence="dig fails",
+        objective="restart",
     )
 
-    resp = client.post(f"/breakglass/{request.id}/approve")
+    resp = client.post(f"/breakglass/{request.id}/approve", data={"host": "eyes"})
 
     assert resp.status_code == 200
     assert len(launcher.calls) == 1
     call = launcher.calls[0]
+    assert call["host"] == "eyes"
     assert call["session_label"] == f"breakglass-{request.id}"
     assert "pihole down" in call["context_markdown"]
     assert "theseus" in call["context_markdown"]
 
 
+def test_approve_needs_a_configured_host_and_changes_nothing_without_one(
+    store: InMemoryBreakGlass, admin: AdminAuth
+):
+    launcher = FakeLauncher()
+    client = _client_with(store, admin, launcher)
+    request = file_request(store)
+
+    for data in ({}, {"host": "not-configured"}):
+        resp = client.post(f"/breakglass/{request.id}/approve", data=data)
+        assert resp.status_code == 400
+
+    assert launcher.calls == []
+    assert run(store.get_request(request.id)).status == PENDING
+
+
 def test_approve_surfaces_launcher_failure_instead_of_hiding_it(
-    store: BreakGlassStore, admin_store: AdminUserStore
+    store: InMemoryBreakGlass, admin: AdminAuth
 ):
     launcher = FakeLauncher(fail=True)
-    client = TestClient(create_app(store, admin_store, launcher))
-    _provision_and_login(client, admin_store)
-    request = store.create(reason="r", target_host="h", evidence="e", proposed_objective="p")
+    client = _client_with(store, admin, launcher)
+    request = file_request(store)
 
-    resp = client.post(f"/breakglass/{request.id}/approve")
+    resp = client.post(f"/breakglass/{request.id}/approve", data={"host": "theseus"})
 
     assert resp.status_code == 502
     assert "ssh exploded" in resp.text
     # The approval itself still went through — only the launch failed.
-    assert store.get(request.id).status == APPROVED
+    assert run(store.get_request(request.id)).status == APPROVED
 
 
-def test_launch_page_404s_without_a_configured_launcher(client: TestClient, admin_store: AdminUserStore):
-    _provision_and_login(client, admin_store)
+def test_launch_page_404s_without_a_configured_launcher(client: TestClient, admin: AdminAuth):
+    _provision_and_login(client, admin)
     resp = client.get("/launch")
     assert resp.status_code == 404
 
 
-def test_launch_page_requires_session(store: BreakGlassStore, admin_store: AdminUserStore):
-    client = TestClient(create_app(store, admin_store, FakeLauncher()))
-    resp = client.get("/launch")
-    assert resp.url.path == "/login"
+def test_launch_page_requires_session(store: InMemoryBreakGlass, admin: AdminAuth):
+    client = TestClient(create_app(store, admin, FakeLauncher()))
+    resp = client.get("/launch", follow_redirects=False)
+    assert resp.headers["location"] == "/login"
 
 
-def test_manual_launch_submits_free_text_context(store: BreakGlassStore, admin_store: AdminUserStore):
+def test_manual_launch_submits_free_text_context_to_the_chosen_host(
+    store: InMemoryBreakGlass, admin: AdminAuth
+):
     launcher = FakeLauncher()
-    client = TestClient(create_app(store, admin_store, launcher))
-    _provision_and_login(client, admin_store)
+    client = _client_with(store, admin, launcher)
 
-    resp = client.post("/launch", data={"context": "investigate disk usage on theseus"})
+    resp = client.post(
+        "/launch", data={"host": "eyes", "context": "investigate disk usage on theseus"}
+    )
 
     assert resp.status_code == 200
     assert len(launcher.calls) == 1
+    assert launcher.calls[0]["host"] == "eyes"
     assert launcher.calls[0]["context_markdown"] == "investigate disk usage on theseus"
     assert launcher.calls[0]["session_label"].startswith("manual-")
     # Not tied to any break-glass request:
-    assert store.list() == []
+    assert run(store.list_requests()) == []
 
 
-def test_manual_launch_rejects_empty_context(store: BreakGlassStore, admin_store: AdminUserStore):
+def test_manual_launch_rejects_empty_context_and_unknown_host(
+    store: InMemoryBreakGlass, admin: AdminAuth
+):
     launcher = FakeLauncher()
-    client = TestClient(create_app(store, admin_store, launcher))
-    _provision_and_login(client, admin_store)
+    client = _client_with(store, admin, launcher)
 
-    resp = client.post("/launch", data={"context": "   "})
-
-    assert resp.status_code == 400
+    assert client.post("/launch", data={"host": "eyes", "context": "   "}).status_code == 400
+    assert client.post("/launch", data={"host": "nope", "context": "x"}).status_code == 400
     assert launcher.calls == []
 
 
-def test_pending_list_shows_launch_link_only_when_launcher_configured(
-    store: BreakGlassStore, admin_store: AdminUserStore, tmp_path: Path
+def test_pages_offer_the_configured_hosts_and_preselect_the_target(
+    store: InMemoryBreakGlass, admin: AdminAuth
 ):
-    without_launcher = TestClient(create_app(store, admin_store, None))
-    _provision_and_login(without_launcher, admin_store)
+    client = _client_with(store, admin, FakeLauncher())
+    file_request(store, target_host="eyes")
 
-    other_path = tmp_path / "other.sqlite"
-    with_launcher_store = BreakGlassStore(other_path)
-    with_launcher_admin = AdminUserStore(other_path)
-    with_launcher = TestClient(create_app(with_launcher_store, with_launcher_admin, FakeLauncher()))
-    _provision_and_login(with_launcher, with_launcher_admin)
+    board = client.get("/breakglass").text
+    form = client.get("/launch").text
 
-    assert "/launch" not in without_launcher.get("/breakglass").text
-    assert "/launch" in with_launcher.get("/breakglass").text
+    assert 'value="eyes" form="approve-' in board and " checked" in board.split('value="eyes"')[1]
+    assert 'value="theseus" form="approve-' in board
+    assert "checked" not in board.split('value="theseus"')[1].split("</label>")[0]
+    assert 'value="theseus" checked' in form  # nothing to match, so the first host is picked
+    assert 'name="host"' in form
+
+
+def test_pending_list_shows_launch_link_only_when_launcher_configured():
+    def logged_in(launcher):
+        auth = AdminAuth(InMemoryAdmin())
+        client = TestClient(create_app(InMemoryBreakGlass(), auth, launcher))
+        _provision_and_login(client, auth)
+        return client
+
+    assert "/launch" not in logged_in(None).get("/breakglass").text
+    assert "/launch" in logged_in(FakeLauncher()).get("/breakglass").text

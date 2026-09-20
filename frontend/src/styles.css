@@ -36,6 +36,7 @@ button:focus-visible, a:focus-visible { outline: 3px solid var(--accent-light); 
 .thread-confirm .danger { border-color: #7b3a30; background: #3a1712; color: #ffb9a8; }
 .thread-list time { display: block; color: #66778a; font-size: 10px; margin-top: 6px; }
 .sidebar-footer { font-size: 11px; color: var(--ag-muted); border-top: 1px solid var(--line); padding: 20px 10px 0; line-height: 1.8; }
+.sidebar-footer .link { background: none; border: 0; padding: 0; margin-top: 12px; font: inherit; color: var(--accent-light); cursor: pointer; }
 .sidebar-footer a { display: block; color: var(--accent-light); margin-top: 12px; text-decoration: none; }
 .status-dot[data-busy] { animation: pulse 1.2s ease-in-out infinite; }
 @keyframes pulse { 50% { opacity: .3; } }

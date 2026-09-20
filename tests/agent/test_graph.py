@@ -11,7 +11,10 @@ from langgraph.checkpoint.memory import InMemorySaver
 from argus.agent.graph import _build_model, build_graph
 from argus.config import AgentConfig
 from argus.policy import PolicyDecision, PolicyEngine
+from argus.providers.breakglass_provider import BreakglassProvider
 from argus.providers.docker_provider import DockerProvider
+from argus.webauth import AdminAuth
+from tests.fakes import InMemoryAdmin, InMemoryBreakGlass
 
 # graph.py disables the "general purpose subagent" for provider "openai" (what
 # ChatOpenAI/OpenRouter resolves as). GenericFakeChatModel resolves as a different
@@ -143,3 +146,26 @@ def test_planner_and_worker_use_different_models():
     worker = _build_model(config, config.worker_model)
 
     assert planner.model_name != worker.model_name
+
+
+def test_the_agent_can_file_a_break_glass_request_but_has_no_way_to_decide_or_launch(
+    tmp_path: Path,
+):
+    config = AgentConfig(workspace_root=str(tmp_path / "workspace"))
+    provider = BreakglassProvider(
+        {}, repository=InMemoryBreakGlass(), admin=AdminAuth(InMemoryAdmin())
+    )
+    graph = build_graph(
+        config=config,
+        providers={"breakglass": provider},
+        provider_settings={"breakglass": {}},
+        policy=PolicyEngine(AlwaysApprove()),
+        checkpointer=InMemorySaver(),
+        model=fake_model(),
+        worker_model=fake_model(),
+    )
+
+    names = bound_tool_names(graph)
+
+    assert "breakglass_request_break_glass" in names
+    assert not {n for n in names if "approve" in n or "launch" in n or "decide" in n}

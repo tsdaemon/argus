@@ -1,4 +1,4 @@
-"""SQLAlchemy models for the Argus-owned History tables.
+"""SQLAlchemy models for the Argus-owned tables: History, and the break-glass store.
 
 Deleting a thread cascades to everything that references it. Both layers are declared: the
 ORM `cascade` (used when children are loaded in a session) and `ON DELETE CASCADE` on the
@@ -16,9 +16,11 @@ from typing import Any
 from sqlalchemy import (
     TIMESTAMP,
     BigInteger,
+    CheckConstraint,
     ForeignKey,
     Identity,
     Index,
+    SmallInteger,
     Text,
     UniqueConstraint,
     func,
@@ -131,3 +133,30 @@ class Approval(Base):
     )
 
     tool_call: Mapped[ToolCall] = relationship(back_populates="approvals")
+
+
+class BreakGlassRequestRow(Base):
+    __tablename__ = "breakglass_requests"
+    __table_args__ = (Index("breakglass_requests_status_idx", "status", "created_at"),)
+
+    id: Mapped[str] = mapped_column(Text, primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), server_default=func.now()
+    )
+    reason: Mapped[str] = mapped_column(Text)
+    target_host: Mapped[str] = mapped_column(Text)
+    evidence: Mapped[str] = mapped_column(Text)
+    proposed_objective: Mapped[str] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(Text, server_default="pending")
+
+
+class AdminAccountRow(Base):
+    """The single break-glass web admin: the one row is pinned to id 1."""
+
+    __tablename__ = "admin_account"
+    __table_args__ = (CheckConstraint("id = 1", name="admin_account_single_row"),)
+
+    id: Mapped[int] = mapped_column(SmallInteger, primary_key=True, autoincrement=False)
+    username: Mapped[str] = mapped_column(Text)
+    password_hash: Mapped[str] = mapped_column(Text)
+    session_secret: Mapped[str] = mapped_column(Text)

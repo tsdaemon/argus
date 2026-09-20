@@ -72,6 +72,7 @@ export default function App() {
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState("");
   const [launch, setLaunch] = useState(false);
+  const [authEnabled, setAuthEnabled] = useState(false);
   const [hasMore, setHasMore] = useState(false);
   const [collapsed, setCollapsed] = useState(readCollapsed);
   const [confirming, setConfirming] = useState<string | null>(null);
@@ -105,9 +106,9 @@ export default function App() {
     try {
       const [rows, config] = await Promise.all([
         api<Thread[]>(`/api/threads?limit=${pageSize}`),
-        api<{ launch_enabled: boolean }>("/api/ui-config"),
+        api<{ launch_enabled: boolean; auth_enabled: boolean }>("/api/ui-config"),
       ]);
-      setThreads(rows); setHasMore(rows.length === pageSize); setLaunch(config.launch_enabled);
+      setThreads(rows); setHasMore(rows.length === pageSize); setLaunch(config.launch_enabled); setAuthEnabled(config.auth_enabled);
       const wanted = new URL(location.href).searchParams.get("thread");
       // The selected thread can be older than the first page.
       if (wanted && /^[0-9a-f-]{36}$/i.test(wanted)) {
@@ -206,6 +207,7 @@ export default function App() {
         <span className="status-dot" data-busy={busy || undefined} />
         <span className="label" role="status">{busy ? "Working…" : "Ready"}</span>
         {launch && <a className="label" href="/launch" target="_blank" rel="noreferrer">Open privileged session ↗</a>}
+        {authEnabled && <form method="post" action="/logout"><button className="link" type="submit">Log out</button></form>}
       </div>
     </aside>
     <main>

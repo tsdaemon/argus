@@ -135,7 +135,7 @@ reachability does not establish that a real client's approval round-trip works.
 Break-glass is the human-only escalation: an unattended run files a request, a person approves
 it from a phone-sized web page, and an optional launcher starts a Claude Code session on a
 host. Its web routes are mounted on the MCP app, so **this check needs `ARGUS_MCP_TOKEN`**.
-The agent must never be able to file, approve, or launch one itself.
+The agent may file a request but must never be able to approve or launch one.
 
 ### Setup
 
@@ -143,12 +143,11 @@ The agent must never be able to file, approve, or launch one itself.
    Quit `task dev` and start it again: Task reads `.env` once, so a running process keeps the
    old environment.
 2. Add the provider to `examples/argus.dev.yaml` under `providers:` (revert it afterwards with
-   `git checkout examples/argus.dev.yaml`; the store lives in the gitignored `.argus/`):
+   `git checkout examples/argus.dev.yaml`; the store is Postgres):
 
    ```yaml
    breakglass:
      enabled: true
-     store_path: ./.argus/breakglass.sqlite
      approval_url: http://127.0.0.1:8421
    ```
 
@@ -173,10 +172,11 @@ The agent must never be able to file, approve, or launch one itself.
    EOF
    ```
 
-   And read the store directly (there is no `argus breakglass` command any more):
+   And read the store directly (it is the `breakglass_requests` table in the dev Postgres, so
+   run `task backend:migrate` once first; there is no `argus breakglass` command any more):
 
    ```bash
-   uv run python -c "import sqlite3; [print(r) for r in sqlite3.connect('.argus/breakglass.sqlite').execute('select id, target_host, status from requests order by created_at')]"
+   docker compose exec postgres psql -U argus -c "select id, target_host, status from breakglass_requests order by created_at"
    ```
 
 ### Checks
@@ -187,9 +187,9 @@ is reachable by anyone else.
 | Check | Prompt/action | Pass condition |
 |---|---|---|
 | MCP needs the token | `curl -s -o /dev/null -w '%{http_code}\n' -X POST http://127.0.0.1:8421/mcp -H 'content-type: application/json' -d '{}'` | `401`. With the token, the only tool an MCP client lists is `request_break_glass`. |
-| Login gate | In a private window open `http://127.0.0.1:8421/breakglass`. | Redirected to `/login`; no request data is shown. |
-| Admin creation | Open `/login` yourself. Save the username (`admin`) and the password it shows once. Log in. Reload `/login` while logged out. | Login lands on `/breakglass`. The password is **not** shown a second time. A wrong password returns to `/login?error=1`. Note: whoever opens `/login` first on a fresh store becomes the admin. |
-| Agent cannot file | In chat: “File a break-glass request for argus-live-a.” Then read the store. | The agent has no such tool and says so or works around it with its own tools. The store gains no row. |
+| Login gate | In a private window open `http://127.0.0.1:8421/breakglass`, then `/` and `/api/threads`. | The pages redirect to `/login` (with `next=`), `/api/threads` returns 401, and no data is shown. `/agent/health` still answers. |
+| Admin creation | Open `/login` yourself. Save the username (`admin`) and the password it shows once. Log in. Reload `/login` while logged out. | Login lands on `/breakglass`. The password is **not** shown a second time. A wrong password returns to `/login?error=1`. Note: without `ARGUS_ADMIN_PASSWORD`, whoever opens `/login` first on a fresh store becomes the admin. After login you land back on the page you asked for, and the sidebar shows Log out. |
+| Agent files, cannot decide | In chat: “File a break-glass request for argus-live-a, host theseus, because it stopped answering.” Then read the store and reload `/breakglass`. Then ask it to approve that request and to launch a session. | The agent calls `breakglass_request_break_glass` with no approval prompt, the store gains one `pending` row, the ntfy push arrives, and the card shows on `/breakglass`. It has no tool to approve or launch and says so. |
 | File a request | Run the MCP helper. Then reload `/breakglass`. | The helper prints `status: pending`. The page shows one card with the reason, target host, evidence, and proposed objective, and Approve and Deny buttons. The store has one `pending` row. |
 | Deny | Click Deny. | The card disappears; the store row is `denied`; nothing starts on any host. |
 | Approve, no launcher | File another request and click Approve. | The card disappears; the row is `approved`; **nothing else happens**: no session, no process, no container change. Approval only records intent. |
@@ -201,15 +201,15 @@ is reachable by anyone else.
 
 ### Launcher (after the checks above pass)
 
-The launcher is opt-in and needs the one-time host setup in the README's “Session launch”
-section: a logged-in `claude` CLI, the trust dialog accepted, `argus-breakglass-launch` installed
-on the host, and a forced-command SSH key. Add the `launcher:` block from that section, restart,
-and check:
+The launcher is opt-in and needs each host prepared by autohome's `breakglass` role (see
+`docs/breakglass.md`): a dedicated user, the launcher script, a forced-command key, and a
+`claude auth login` done once by hand. Add the `launcher:` block with your `hosts:` (see the
+README's “Session launch”), restart, and check:
 
 | Check | Action | Pass condition |
 |---|---|---|
 | Link appears | Reload the argus UI. | “Open privileged session ↗” shows in the sidebar footer, and opens `/launch` in a new tab. Without a launcher it must be absent. |
-| Approve launches | File a request and click Approve. | A detached `claude remote-control` session starts on the host with the label `breakglass-<id>`, the configured permission mode, and a `CONTEXT.md` holding that request's target, reason, evidence, and objective. |
+| Approve launches | File a request, choose the host in the picker beside Approve, and click Approve. | A detached `claude remote-control` session starts on the chosen host with the label `breakglass-<id>`, the configured permission mode, and a `CONTEXT.md` holding that request's target, reason, evidence, and objective. |
 | Launch failure is reported | Break the host, user, or key and approve a request. | The page says “Approved, but launching the host session failed” with the error (HTTP 502). The row is still `approved`; nothing is claimed as started. |
 | The key can only launch | `ssh -i <key> <user>@<host> id` from another shell. | It does not run `id`; only the fixed launch script runs, with no shell or port forwarding. |
 | TTL | Wait out a short `ttl_seconds` set for the test. | The session is killed on time. |

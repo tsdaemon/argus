@@ -6,9 +6,9 @@ restricted with a forced command (`command="..."`) plus `no-pty,no-port-forwardi
 no-X11-forwarding,no-agent-forwarding` — so whatever this class asks the SSH client to
 run is irrelevant, the server always runs the forced command instead, ignoring the
 client's request entirely (standard OpenSSH behavior). See the README for the exact
-`authorized_keys` line and `argus.host_launch` for what that forced command should be.
+`authorized_keys` line, and docs/breakglass.md for the forced command, which autohome installs.
 
-`permission_mode` and `ttl_seconds` are fixed at construction time from this
+`permission_mode` and `ttl_seconds` are fixed per host from this
 deployment's own config — never from a break-glass request's fields — precisely so an
 agent's `request_break_glass` call can influence what a human reads, never how the
 resulting session is launched or scoped.
@@ -18,40 +18,50 @@ from __future__ import annotations
 
 import asyncio
 import json
+from dataclasses import dataclass
 from typing import Any
+
+# Sent with every payload so a host running an older or newer launcher script can refuse
+# a shape it does not understand instead of misreading it.
+PROTOCOL = 1
+
+
+@dataclass(frozen=True)
+class SshTarget:
+    host: str
+    user: str
+    identity_file: str | None = None
+    port: int = 22
+    permission_mode: str = "manual"
+    ttl_seconds: int | None = None
 
 
 class SshHostLauncher:
-    def __init__(
-        self,
-        *,
-        host: str,
-        user: str,
-        identity_file: str | None = None,
-        port: int = 22,
-        permission_mode: str = "manual",
-        ttl_seconds: int | None = None,
-    ) -> None:
-        self._host = host
-        self._user = user
-        self._identity_file = identity_file
-        self._port = port
-        self._permission_mode = permission_mode
-        self._ttl_seconds = ttl_seconds
+    def __init__(self, targets: dict[str, SshTarget]) -> None:
+        self._targets = targets
 
-    async def launch(self, *, session_label: str, context_markdown: str) -> None:
+    @property
+    def hosts(self) -> list[str]:
+        return list(self._targets)
+
+    async def launch(self, *, host: str, session_label: str, context_markdown: str) -> None:
+        target = self._targets.get(host)
+        if target is None:
+            raise ValueError(f"Unknown host {host!r}; configured hosts: {self.hosts}")
+
         payload: dict[str, Any] = {
+            "protocol": PROTOCOL,
             "session_label": session_label,
             "context_markdown": context_markdown,
-            "permission_mode": self._permission_mode,
+            "permission_mode": target.permission_mode,
         }
-        if self._ttl_seconds is not None:
-            payload["ttl_seconds"] = self._ttl_seconds
+        if target.ttl_seconds is not None:
+            payload["ttl_seconds"] = target.ttl_seconds
 
-        cmd = ["ssh", "-o", "BatchMode=yes", "-p", str(self._port)]
-        if self._identity_file:
-            cmd += ["-i", self._identity_file]
-        cmd.append(f"{self._user}@{self._host}")
+        cmd = ["ssh", "-o", "BatchMode=yes", "-p", str(target.port)]
+        if target.identity_file:
+            cmd += ["-i", target.identity_file]
+        cmd.append(f"{target.user}@{target.host}")
         # No remote command specified: irrelevant given the forced-command restriction
         # this launcher assumes is in place server-side, and clearer for it — we aren't
         # pretending to ask for anything the server would actually honor.
@@ -65,6 +75,6 @@ class SshHostLauncher:
         _stdout, stderr = await proc.communicate(json.dumps(payload).encode("utf-8"))
         if proc.returncode != 0:
             raise RuntimeError(
-                f"ssh launch failed (exit {proc.returncode}): "
+                f"ssh launch to {host} failed (exit {proc.returncode}): "
                 f"{stderr.decode(errors='replace').strip()}"
             )

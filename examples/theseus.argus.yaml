@@ -13,22 +13,22 @@ providers:
 
   breakglass:
     enabled: true
-    store_path: /opt/docker-data/argus/breakglass.sqlite
     approval_url: https://argus.theseus.internal
     notify:
       type: ntfy
       topic_url: ${ARGUS_NTFY_TOPIC_URL}
-    # Set up once by hand on theseus itself (claude CLI logged in, workspace trust
-    # accepted, forced-command SSH key in authorized_keys) before enabling this — see
-    # the README's "Session launch" section. 127.0.0.1 here assumes Argus's container
-    # shares theseus's network namespace/stack; use the LAN address otherwise.
+    # Hosts are prepared by autohome's `breakglass` role (see docs/breakglass.md): a
+    # dedicated user, the launcher script, and a forced-command key. Use the LAN address
+    # of each host; the container cannot resolve .local names.
     # launcher:
     #   type: ssh
-    #   host: 127.0.0.1
-    #   user: argus-launcher
     #   identity_file: /run/secrets/argus_launcher_key
-    #   permission_mode: acceptEdits
-    #   ttl_seconds: 14400
+    #   permission_mode: manual
+    #   ttl_seconds: 900
+    #   hosts:
+    #     theseus:
+    #       host: 192.168.0.7
+    #       user: argus-bg
 
 policy:
   default_mutate: require_approval

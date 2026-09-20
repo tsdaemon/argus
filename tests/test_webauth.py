@@ -1,16 +1,16 @@
 from __future__ import annotations
 
 import time
-from pathlib import Path
 
 from argus.webauth import (
     DEFAULT_USERNAME,
-    AdminUserStore,
+    AdminAuth,
     _hash_password,
     _verify_password,
     sign_session,
     verify_session,
 )
+from tests.fakes import InMemoryAdmin
 
 
 def test_hash_and_verify_password_roundtrip():
@@ -35,11 +35,11 @@ def test_verify_uses_iteration_count_stored_in_the_hash_not_the_current_constant
     assert _verify_password("a password", old_hash)
 
 
-def test_get_or_create_generates_account_only_once(tmp_path: Path):
-    store = AdminUserStore(tmp_path / "auth.sqlite")
+async def test_get_or_create_generates_account_only_once():
+    admin = AdminAuth(InMemoryAdmin())
 
-    account1, password1 = store.get_or_create()
-    account2, password2 = store.get_or_create()
+    account1, password1 = await admin.get_or_create()
+    account2, password2 = await admin.get_or_create()
 
     assert password1 is not None
     assert password2 is None
@@ -47,31 +47,40 @@ def test_get_or_create_generates_account_only_once(tmp_path: Path):
     assert account1.username == DEFAULT_USERNAME
 
 
-def test_get_or_create_generated_password_actually_verifies(tmp_path: Path):
-    store = AdminUserStore(tmp_path / "auth.sqlite")
+async def test_a_configured_initial_password_is_used_and_never_revealed():
+    admin = AdminAuth(InMemoryAdmin())
 
-    account, password = store.get_or_create()
+    account, revealed = await admin.get_or_create("from-the-environment")
+
+    assert revealed is None
+    assert await admin.verify(account.username, "from-the-environment")
+
+
+async def test_get_or_create_generated_password_actually_verifies():
+    admin = AdminAuth(InMemoryAdmin())
+
+    account, password = await admin.get_or_create()
 
     assert password is not None
-    assert store.verify(account.username, password)
-    assert not store.verify(account.username, "wrong-password")
+    assert await admin.verify(account.username, password)
+    assert not await admin.verify(account.username, "wrong-password")
 
 
-def test_verify_unknown_username_fails(tmp_path: Path):
-    store = AdminUserStore(tmp_path / "auth.sqlite")
-    _account, password = store.get_or_create()
+async def test_verify_unknown_username_fails():
+    admin = AdminAuth(InMemoryAdmin())
+    _account, password = await admin.get_or_create()
 
-    assert not store.verify("not-admin", password)
+    assert not await admin.verify("not-admin", password)
 
 
-def test_persists_across_instances(tmp_path: Path):
-    path = tmp_path / "auth.sqlite"
-    account, password = AdminUserStore(path).get_or_create()
+async def test_account_persists_across_instances_of_the_same_repository():
+    repository = InMemoryAdmin()
+    account, password = await AdminAuth(repository).get_or_create()
 
-    reopened = AdminUserStore(path)
+    reopened = AdminAuth(repository)
 
-    assert reopened.get() == account
-    assert reopened.verify(account.username, password)
+    assert await reopened.get() == account
+    assert await reopened.verify(account.username, password)
 
 
 def test_session_sign_and_verify_roundtrip():

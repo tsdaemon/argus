@@ -6,7 +6,8 @@ of truth for which providers exist and how their config resolves to an instance.
 
 from __future__ import annotations
 
-from collections.abc import Collection
+from collections.abc import Collection, Mapping
+from typing import Any
 
 from argus.config import ArgusConfig
 from argus.providers.base import Provider
@@ -20,10 +21,15 @@ PROVIDER_REGISTRY: dict[str, type[Provider]] = {
 
 
 def instantiate_providers(
-    config: ArgusConfig, *, exclude: Collection[str] = ()
+    config: ArgusConfig,
+    *,
+    exclude: Collection[str] = (),
+    dependencies: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> dict[str, Provider]:
     """Every enabled provider from `config.providers`, skipping any name in `exclude`
-    (the agent harness excludes `breakglass` — see `argus.api.app`)."""
+    (the agent harness excludes `breakglass` — see `argus.api.app`). `dependencies` maps a
+    provider name to keyword arguments for its constructor, for what config cannot supply
+    (the break-glass provider's database repository)."""
     providers: dict[str, Provider] = {}
     for provider_name, entry in config.providers.items():
         if not entry.enabled or provider_name in exclude:
@@ -34,5 +40,7 @@ def instantiate_providers(
                 f"Unknown provider '{provider_name}' in config. "
                 f"Known providers: {sorted(PROVIDER_REGISTRY)}"
             )
-        providers[provider_name] = provider_cls(entry.settings())
+        providers[provider_name] = provider_cls(
+            entry.settings(), **(dependencies or {}).get(provider_name, {})
+        )
     return providers

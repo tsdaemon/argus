@@ -894,3 +894,145 @@ first on a fresh store becomes the admin, which the plan now states.
 
 Also recorded the generative UI item under "Not started" and removed A2UI from the out-of-scope
 list (see above).
+
+### Break-glass design page; multi-host direction decided — 2026-09-20
+
+Wrote [breakglass.md](breakglass.md) (linked from DESIGN.md's break-glass bullet): the parts,
+four sequence diagrams (request and approve, manual launch, working in the session and
+root, host onboarding), and a trust table. It describes the built single-host flow and marks
+the multi-host parts as planned.
+
+Decisions, none implemented yet:
+
+- The per-host transport stays SSH with a forced command; no new network daemon.
+- Root is reached by the operator typing the sudo password into the launched session, so
+  the password passes through the model provider by choice. No `NOPASSWD`, and argus never
+  handles the password. The launched session runs as an unprivileged sudoer.
+- One `claude auth login` per host, no copied credentials. Read from the Claude Code docs:
+  Remote Control needs a full-scope login, so `claude setup-token` and API keys cannot be
+  used, and a saved login expires (warned three days ahead).
+- Install as an autohome Ansible role; the launcher becomes a standalone stdlib-only script.
+- argus config gains a named `hosts:` map. `target_host` on a request is free text today and
+  routes nothing.
+
+Unverified: whether `sudo` works without a tty from Claude's shell tool, whether the docs'
+refresh behavior means copied logins would log hosts out of each other (moot now), and
+everything on a real host. No code changed; nothing was run.
+
+### Break-glass host side moved to autohome; launcher key as a Docker secret — 2026-09-20
+
+The host script and its install now live in autohome (`roles/utilities/breakglass`, with a
+`claude` package role, both syntax-checked, launcher unit tests passing, never run on a real
+host). argus still has `host_launch.py`, which is to be removed with the `hosts:` work.
+Launcher key pair generated in the gitignored `.ssh/` of this repo; autohome takes
+the public half from `secrets.yaml`, so no key material is committed.
+
+`docker-compose.deploy.yml.example` now injects the private key and a `known_hosts` file as
+Compose secrets (mode 0400 root for the key) instead of the old bind-mount comment, which would
+have resolved on theseus under `docker --context theseus`. New keys `ARGUS_LAUNCHER_KEY_PATH`
+and `ARGUS_KNOWN_HOSTS_PATH` in `.env.deploy.example`, both required. Verified only that
+`docker compose config` interpolates and that a missing variable fails with the message. Not
+verified: that Compose copies secret files to the remote engine with the requested mode, and
+that ssh accepts the key there. No Docker daemon was reachable from this shell, and I did not
+touch theseus.
+
+### Break-glass launcher verified on theseus — 2026-09-20
+
+Ran the autohome `claude` and `breakglass` roles on theseus, then launched a session over SSH
+with the launcher key (`.ssh/argus_launcher`, gitignored) and a 15-minute TTL. First runs
+failed twice, each time with `claude` exiting immediately, and the log showed why:
+
+1. `Workspace not trusted`: every session gets a fresh directory. The launcher now writes
+   `hasTrustDialogAccepted` for it into the user's `~/.claude.json` (undocumented file; the shape
+   matches a report from another user and was confirmed by the file's contents on theseus).
+2. `Enable Remote Control? (y/n)` read from stdin, which was `/dev/null`. The launcher now
+   answers `y` through a pipe.
+
+After both, `claude remote-control` stayed up and the operator reported the session working.
+Also confirmed earlier: the forced-command key runs the launcher whatever the client asks for,
+and a malformed payload exits 1 without starting anything.
+
+Not exercised: the sudo path with a password (whether `sudo` works without a tty and where the
+password ends up), launching through argus's approve and `/launch`, ntfy, and Compose
+delivering the launcher key as a secret. `host_launch.py` and its test are still in this repo
+and are now dead code; remove them with the `hosts:` work.
+
+### Break-glass moved to Postgres; launcher takes named hosts — 2026-09-20
+
+The request store and the admin account were the last things on sqlite, left from the standalone
+MCP server. They are now `breakglass_requests` and `admin_account` in the argus Postgres,
+behind a `BreakGlassRepository` (`argus.db.breakglass`: `SqlBreakGlass`, plus
+`tests.fakes.InMemoryBreakGlass`), with Alembic revision `f2a6d8c41b93`. `AdminUserStore` became
+`AdminAuth` over that repository, the provider takes the repository as a constructor
+dependency (`instantiate_providers(..., dependencies=...)`), and `create_app` wires
+`SqlBreakGlass(engine)`. `store_path` is gone from the config, and the compose `argus-state`
+volume that held the sqlite file with it. Existing sqlite rows are not carried over; the
+first `/login` after migrating creates a new admin and shows a new password.
+
+The launcher config is now a `hosts:` map with shared defaults and per-host overrides. The
+approve button and `/launch` show a host picker; the request's `target_host` text preselects a
+match; approving or launching without a configured host is refused before anything changes.
+Every payload carries `protocol: 1`, which the host script in autohome enforces. `host_launch.py`,
+its test and the console-script entry were removed; the script lives in autohome.
+
+Verified: full suite, 160 passed, none skipped, so the Postgres half of the repository contract
+suite ran against the real database in a throwaway schema (which also ran the new migration),
+and `alembic check` reports no drift. Not verified: the changed app against a running
+`task dev`, since the dev database needs `task backend:migrate` first, and the host picker in a
+browser.
+
+### One app-wide login — 2026-09-20
+
+The chat UI, `/api/threads`, `/agent`, and the break-glass pages had no authentication, which the
+ledger and AGENTS.md listed as an open risk. Traefik basic auth was considered and rejected
+because it and the MCP bearer token share the `Authorization` header, so external MCP clients
+would be refused; the login is in the app instead.
+
+`argus.api.auth.add_auth` adds `/login` and `/logout` and an ASGI gate (not
+`BaseHTTPMiddleware`, so the AG-UI event stream is untouched) in front of everything else.
+Open paths: `/login`, `/logout`, `/agent/health`, `/mcp`. Page requests without a session are
+redirected to `/login?next=...` (only local paths are honored), other requests get 401, and the
+UI's `api()` helper sends a 401 to the login form. The account is the existing `admin_account`,
+split out of the break-glass store into its own `AdminRepository` (`argus.db.admin`); the
+break-glass pages still check the session themselves. `ARGUS_ADMIN_PASSWORD` seeds the password
+on first `/login` so a deployment never shows a claimable form (unset means a generated
+password shown once, for local development); the deploy overlay requires
+`DEPLOY_ARGUS_ADMIN_PASSWORD`. The app is open only where it is built without an admin
+repository, which is what the tests and the Playwright server do. Sidebar gets a Log out button
+when `/api/ui-config` reports `auth_enabled`.
+
+Verified: 170 pytest passed, none skipped (Postgres half included), ruff clean, `tsc` clean. Not
+verified: the login in a browser, through Vite on 5173, or with `task frontend:test`. Known gaps:
+no rate limiting or lockout, no password rotation short of deleting the row, and a session
+lasts 30 days.
+
+### Shared page template and login restyle — 2026-09-20
+
+The login and break-glass pages were built from f-strings in two modules, full-width, with no
+favicon. They are now Jinja templates in `src/argus/templates/` (`jinja2` added as a
+dependency, lockfile updated) that extend one `base.html`: shared head, the eye logo as an
+inline data-URI favicon (so no route to serve or gate), one stylesheet, and a header linking to
+the chat. Content is centered in a narrow column and uses the app's palette; the host picker is a
+set of radio pills (a native select drew an unstyleable OS dropdown); autoescaping
+replaces the hand-written `html.escape` calls, and error and status text goes through a shared
+`message.html`. `mark.svg` is a copy of `frontend/src/favicon.svg`; update both together.
+
+Checked by rendering each template in headless Chromium at desktop and phone widths, and a test
+run of 170 passed. Not checked: the pages served by a live app, or the approve page on a phone
+through a real request.
+
+### The agent can file a break-glass request — 2026-09-20
+
+`breakglass` had been kept off the agent's tool list since the first commit, stated in AGENTS.md,
+DESIGN.md, and the README but never argued anywhere. A live check showed the agent could not
+help when asked about a break-glass procedure, and invented an "internal access portal".
+`request_break_glass` is READ (it only records a request), so `build_app` now hands the
+provider to the agent whenever it has a break-glass repository; the agent binding uses the
+same specs as `/mcp`. What stays out of reach is unchanged: no tool approves, denies, or
+launches, on either binding, and both remain human routes behind the admin login. The
+"Agent cannot file" live check became "Agent files, cannot decide".
+
+Verified: 172 pytest passed, none skipped; the agent graph binds `breakglass_request_break_glass`
+and nothing containing approve, launch, or decide, and `build_app` gives the agent the provider
+only with a store. Not verified: a real model calling the tool, and the ntfy push from an agent
+call. The tool runs without an approval card, since READ is allowed by policy.

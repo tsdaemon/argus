@@ -1,8 +1,9 @@
-"""Single-admin login for the break-glass web UI.
+"""Single-admin login for the whole app: the UI, the chat API, and the break-glass pages.
 
-No pre-shared token to configure: the first visit to /login generates a random
-password (and a stable session-signing secret), stores only their hashes/values in
-sqlite, and shows the password once. From then on it's a normal username+password
+The first visit to /login creates the account and a stable session-signing secret, storing
+only the password's hash and the secret. The password is `ARGUS_ADMIN_PASSWORD` when that is
+set (a deployment: nothing is shown, and a visitor cannot choose it), otherwise a generated
+one shown once (local development). From then on it's a normal username+password
 login backed by a signed, HttpOnly session cookie.
 
 Deliberately minimal — one admin account, no password reset flow, no rate limiting.
@@ -16,21 +17,14 @@ import hashlib
 import hmac
 import json
 import secrets
-import sqlite3
 import time
-from dataclasses import dataclass
-from pathlib import Path
+
+from argus.db.admin import AdminAccount, AdminRepository
 
 _PBKDF2_ITERATIONS = 260_000
 DEFAULT_USERNAME = "admin"
+SESSION_COOKIE = "argus_session"
 SESSION_MAX_AGE_SECONDS = 30 * 24 * 60 * 60  # 30 days
-
-
-@dataclass(frozen=True)
-class AdminAccount:
-    username: str
-    password_hash: str
-    session_secret: str
 
 
 def _hash_password(
@@ -57,61 +51,42 @@ def _verify_password(password: str, stored_hash: str) -> bool:
     return hmac.compare_digest(candidate, stored_hash)
 
 
-class AdminUserStore:
-    """Sqlite-backed, single-row admin account. Same short-lived-connection pattern
-    as BreakGlassStore — safe to share the process with it (and, if pointed at the
-    same file, they coexist as separate tables without conflict)."""
+class AdminAuth:
+    """The single admin account."""
 
-    def __init__(self, path: str | Path) -> None:
-        self._path = Path(path)
-        self._path.parent.mkdir(parents=True, exist_ok=True)
-        with self._connect() as conn:
-            conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS admin_account (
-                    id INTEGER PRIMARY KEY CHECK (id = 1),
-                    username TEXT NOT NULL,
-                    password_hash TEXT NOT NULL,
-                    session_secret TEXT NOT NULL
-                )
-                """
-            )
+    def __init__(self, repository: AdminRepository) -> None:
+        self._repository = repository
 
-    def _connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self._path)
-        conn.row_factory = sqlite3.Row
-        return conn
+    async def get(self) -> AdminAccount | None:
+        return await self._repository.get_admin()
 
-    def get(self) -> AdminAccount | None:
-        with self._connect() as conn:
-            row = conn.execute(
-                "SELECT username, password_hash, session_secret FROM admin_account WHERE id = 1"
-            ).fetchone()
-        return AdminAccount(**dict(row)) if row else None
-
-    def get_or_create(self) -> tuple[AdminAccount, str | None]:
-        """Returns (account, generated_password). generated_password is only set the
-        one time this call is the one that creates the account — the caller uses that
-        to decide whether to show the reveal banner."""
-        existing = self.get()
+    async def get_or_create(
+        self, initial_password: str | None = None
+    ) -> tuple[AdminAccount, str | None]:
+        """Returns (account, generated_password). generated_password is only set when this
+        call created the account with a password it made up — the caller uses that to decide
+        whether to show the reveal banner. With `initial_password` the account gets that one
+        and nothing is revealed."""
+        existing = await self.get()
         if existing is not None:
             return existing, None
 
-        password = secrets.token_urlsafe(18)
+        generated = None if initial_password else secrets.token_urlsafe(18)
+        password = initial_password or generated
         account = AdminAccount(
             username=DEFAULT_USERNAME,
             password_hash=_hash_password(password),
             session_secret=secrets.token_hex(32),
         )
-        with self._connect() as conn:
-            conn.execute(
-                "INSERT INTO admin_account VALUES (1, :username, :password_hash, :session_secret)",
-                account.__dict__,
-            )
-        return account, password
+        if await self._repository.create_admin_if_absent(account):
+            return account, generated
+        # Another first visit stored its account between the read and the insert.
+        stored = await self.get()
+        assert stored is not None
+        return stored, None
 
-    def verify(self, username: str, password: str) -> bool:
-        account = self.get()
+    async def verify(self, username: str, password: str) -> bool:
+        account = await self.get()
         if account is None or not hmac.compare_digest(username, account.username):
             return False
         return _verify_password(password, account.password_hash)

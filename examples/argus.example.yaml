@@ -19,9 +19,6 @@ providers:
   # --- Break-glass: the unattended-run escape hatch --------------------------------
   breakglass:
     enabled: true
-    # Where the sqlite request store lives, used by the /breakglass web view (mounted on the
-    # same server process, see README).
-    store_path: /var/lib/argus/breakglass.sqlite
     # Base URL of this deployment's own /breakglass page, used to build a clickable link
     # in the push notification below. Leave unset to skip the link.
     approval_url: https://argus.example.internal
@@ -39,11 +36,17 @@ providers:
     # (a forced-command SSH key is the actual security boundary here, not this config).
     # launcher:
     #   type: ssh
-    #   host: argus-target.example.internal
-    #   user: argus-launcher
     #   identity_file: /run/secrets/argus_launcher_key
     #   permission_mode: acceptEdits   # manual | acceptEdits | dontAsk | auto
     #   ttl_seconds: 14400              # kills the session after 4h regardless; optional
+    #   hosts:                          # names shown in the approve and /launch pickers
+    #     argus-target:
+    #       host: argus-target.example.internal
+    #       user: argus-bg
+    #     other-host:                   # any top-level setting can be overridden per host
+    #       host: other.example.internal
+    #       user: argus-bg
+    #       port: 2222
 
 # --- Agent: the LangGraph-based interactive harness (the `create_app` server) ---------
 # The agent invokes providers directly in-process. Its optional MCP interface exposes

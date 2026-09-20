@@ -124,9 +124,9 @@ credential Argus needs — it routes to any upstream model (Anthropic, OpenAI, G
 name in `agent.model` in your config, no code change to switch. See
 [Configuration](#configuration).
 
-If a `breakglass` provider + launcher are configured, open `/breakglass` — the first visit
-creates an admin account and shows the generated password once (see
-[Break-glass](#break-glass)).
+The whole app sits behind one admin login: the first visit to `/login` creates the account and
+shows a generated password once (see [Login](#login)). If a `breakglass` provider + launcher
+are configured, `/breakglass` is behind the same login (see [Break-glass](#break-glass)).
 
 ## Running it
 
@@ -170,10 +170,19 @@ published port, default 8421. Use either this container or the local `task backe
 that port. The Docker socket supplies the provider; `allowed_containers` in the config
 scopes its operations. A read-only socket bind does not restrict Docker API calls.
 
-The agent and chat/history API currently share the same access boundary: no
-application-level authentication. Keep them local or behind an authenticated proxy;
-`ARGUS_MCP_TOKEN` protects `/mcp` only. The privileged-session link opens the existing
-admin-login-protected `/launch` page when that interface is enabled.
+### Login
+
+The UI, the chat and history API, `/agent`, and the break-glass pages all require the admin
+login, a signed session cookie behind one account (`admin`). Three things stay open: `/login`,
+`/agent/health`, and `/mcp`, which external clients reach with `ARGUS_MCP_TOKEN` instead of a
+browser. Without a session a page request is redirected to `/login`, and an API call gets 401.
+
+The first visit to `/login` creates the account. Set `ARGUS_ADMIN_PASSWORD` to choose its
+password (do this for any deployment, so a stranger reaching a fresh instance cannot pick it);
+otherwise one is generated and shown once. The variable only seeds the account. To rotate the
+password, delete the row (`delete from admin_account`) and visit `/login` again. There is no
+rate limiting, so keep the app on a LAN, a VPN, or behind a tunnel rather than the open internet.
+The privileged-session link opens the `/launch` page under the same login.
 
 Browser integration tests use in-memory history and checkpoint stores, the real Python
 graph/API, and a fake model/Docker client, so they need no database. After building the UI,
@@ -217,9 +226,8 @@ API keys never need to be committed.
 - **`docker`** — container visibility (`list_containers`, `get_container_status`,
   `get_container_logs`, `inspect_container`) and `restart_container`, optionally scoped to an
   `allowed_containers` list.
-- **`breakglass`** — `request_break_glass` (exposed through the MCP interface — see
-  [`docs/DESIGN.md`](docs/DESIGN.md#trust-boundaries) for why it's never bound to the agent
-  itself), plus the sqlite-backed request store behind the `/breakglass` web view.
+- **`breakglass`** — `request_break_glass` (available to the agent and through the MCP interface; it only
+  records a request, see [`docs/DESIGN.md`](docs/DESIGN.md#trust-boundaries)), plus the Postgres-backed request store behind the `/breakglass` web view.
 
 **Roadmap** (same `Provider` shape, not built yet — see [Adding a provider](#adding-a-provider)):
 `systemd` (unit status, journal logs, restart unit), `disk`/SMART (health, storage usage),
@@ -264,13 +272,11 @@ a human is live in the Argus Agent UI, they'd just answer the HITL approval prom
 tool directly.) That means the approval channel can't assume a terminal or SSH session either —
 it needs to work from a phone with nothing installed beyond a browser:
 
-1. A pending request writes a row to a local sqlite store and fires a best-effort push (v1: via
+1. A pending request writes a row to Postgres and fires a best-effort push (v1: via
    [ntfy](https://ntfy.sh) — no account, no API key, one HTTP POST to a topic URL you pick).
 2. The push links straight into a minimal, plain-HTML, no-JS approval page served at
    `/breakglass` on the same server process. No token to configure or embed in a
-   URL: the first visit to `/login` generates a single admin account and shows the
-   password once (save it — a password manager, not a note), then it's a normal
-   username+password login backed by a signed session cookie. Log in, see the
+   URL: it uses the app's admin login (see [Login](#login)). Log in, see the
    reason/evidence/target, tap Approve or Deny.
 3. If a `launcher` is configured (see below), **approving also starts a Claude Code session on
    the host**, seeded with that request's reason/evidence/objective. If no launcher is
@@ -284,7 +290,8 @@ you — one implementation, not two.
 The one thing worth being deliberate about: everything else in Argus is scoped to a small,
 specific, classified action. "Start a privileged, largely unrestricted Claude Code session" is
 categorically bigger than any of that. So the launcher is opt-in, kept entirely off both the MCP
-surface and the agent's own tool list (no agent ever triggers it — only the human-facing
+surface and the agent's own tool list (no agent ever triggers it; an agent can only file a
+request — only the human-facing
 `/breakglass` and `/launch` web routes do), and the security boundary lives on the machine that
 actually runs the session, not in Argus's code:
 
@@ -307,37 +314,32 @@ come from *this deployment's config* (the `launcher:` block), never from a break
 request's fields, so an agent's `request_break_glass` call can influence what a human reads,
 never how the resulting session is scoped.
 
-**Set up once, by hand, on the host that should run these sessions:**
+**Set up each host once.** The host side (a dedicated user, the launcher script, a
+forced-command SSH key, and `claude` installed) is provisioned by the `breakglass` role in
+[autohome](https://github.com/tsdaemon/autohome). The one step no tool can do is
+`claude auth login` as that user, which needs a browser. See
+[`docs/breakglass.md`](docs/breakglass.md) for the flow, the trust model, and the payload
+contract between this service and the host script.
 
-1. Install and log in the `claude` CLI (`claude /login`, a Pro/Max/Team/Enterprise account with
-   full-scope OAuth — not `ANTHROPIC_API_KEY`) as whatever account you'd normally do admin work
-   as. Never as root.
-2. Run `claude` once, interactively, in the directory `ARGUS_BREAKGLASS_SESSIONS_DIR` will use
-   (default `~/.argus/breakglass-sessions`), to accept the workspace trust dialog.
-3. `pip install argus` (or just this repo) on that host too, for the
-   `argus-breakglass-launch` console script.
-4. Generate a dedicated keypair (`ssh-keygen -t ed25519 -f argus_launcher`) and restrict it in
-   that host's `~/.ssh/authorized_keys`:
+The forced-command restriction on the host is the actual security boundary: even if the private
+key leaked out of Argus's container, it can *only* ever run that one fixed script — nothing else,
+no shell, no port forwarding. Mount the private key into wherever the argus server runs, then
+name each host:
 
-   ```
-   command="/path/to/argus-breakglass-launch",no-pty,no-port-forwarding,no-X11-forwarding,no-agent-forwarding ssh-ed25519 AAAA...
-   ```
+```yaml
+breakglass:
+  launcher:
+    type: ssh
+    identity_file: /run/secrets/argus_launcher_key
+    permission_mode: manual        # manual | acceptEdits | dontAsk | auto
+    ttl_seconds: 900               # session is killed after this regardless; omit to disable
+    hosts:
+      theseus:
+        host: 192.168.0.7
+        user: argus-bg
+```
 
-   That restriction is the actual security boundary: even if the private key leaked out of
-   Argus's container, it can *only* ever run that one fixed script — nothing else, no shell, no
-   port forwarding.
-5. Mount the private key into wherever the argus server runs, and set:
-
-   ```yaml
-   breakglass:
-     launcher:
-       type: ssh
-       host: theseus.internal   # or 127.0.0.1 if the host and Argus's container share a network
-       user: argus-launcher
-       identity_file: /run/secrets/argus_launcher_key
-       permission_mode: acceptEdits   # manual | acceptEdits | dontAsk | auto
-       ttl_seconds: 14400              # session is killed after 4h regardless; omit to disable
-   ```
+The approve button and the `/launch` page both ask which of these hosts to launch on.
 
 A launched session doesn't stream anywhere — you open it from your own Claude app once it's
 running (Remote Control is outbound-only and tied to your account, so it just shows up there;

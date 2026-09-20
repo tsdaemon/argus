@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
 
 from argus.policy import PolicyEngine
 from argus.providers.breakglass_provider import PENDING, BreakglassProvider
+from argus.webauth import AdminAuth
+from tests.fakes import InMemoryAdmin, InMemoryBreakGlass
 
 
 class FakeMCP:
@@ -26,12 +26,19 @@ class AlwaysApprove:
 
 
 @pytest.fixture
-def provider_and_mcp(tmp_path: Path):
-    provider = BreakglassProvider({"store_path": str(tmp_path / "breakglass.sqlite")})
+def provider_and_mcp():
+    provider = BreakglassProvider(
+        {}, repository=InMemoryBreakGlass(), admin=AdminAuth(InMemoryAdmin())
+    )
     mcp = FakeMCP()
     policy = PolicyEngine(AlwaysApprove())
     provider.register(mcp, policy, {})
     return provider, mcp
+
+
+def test_provider_refuses_to_exist_without_its_dependencies():
+    with pytest.raises(RuntimeError, match="needs a BreakGlassRepository and AdminAuth"):
+        BreakglassProvider({})
 
 
 @pytest.mark.asyncio
@@ -46,7 +53,7 @@ async def test_request_break_glass_is_registered_and_files_a_pending_request(pro
     )
 
     assert result["status"] == PENDING
-    stored = provider.store.get(result["id"])
+    stored = await provider.repository.get_request(result["id"])
     assert stored is not None
     assert stored.target_host == "theseus"
-    assert provider.store.list(status=PENDING) == [stored]
+    assert await provider.repository.list_requests(status=PENDING) == [stored]

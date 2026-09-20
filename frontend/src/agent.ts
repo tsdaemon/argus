@@ -28,8 +28,15 @@ export interface Thread {
   updated_at: string;
 }
 
+/** The session is gone or was never there: go through the login form and come back. */
+function toLogin(): never {
+  window.location.assign(`/login?next=${encodeURIComponent(window.location.pathname + window.location.search)}`);
+  throw new Error("Login required.");
+}
+
 export async function deleteThread(id: string): Promise<void> {
   const response = await fetch(`/api/threads/${id}`, { method: "DELETE" });
+  if (response.status === 401) toLogin();
   // 404 means it is already gone, which is the state the caller wanted.
   if (!response.ok && response.status !== 404) {
     throw new Error(`Could not delete the conversation (${response.status}).`);
@@ -38,6 +45,7 @@ export async function deleteThread(id: string): Promise<void> {
 
 export async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, init);
+  if (response.status === 401) toLogin();
   if (!response.ok) throw new Error(`Could not load argus (${response.status}). Check the server and database, then retry.`);
   return response.json() as Promise<T>;
 }

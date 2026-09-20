@@ -1,0 +1,8 @@
+<svg viewBox="0 0 64 64" role="img" aria-label="argus">
+  <rect width="64" height="64" rx="12" fill="#050709"/>
+  <path d="M3 32Q32 6 61 32Q32 58 3 32Z" fill="#f6f2ee"/>
+  <circle cx="32" cy="32" r="14" fill="#2389c7"/>
+  <circle cx="32" cy="32" r="14" fill="none" stroke="#6dbee8" stroke-width="2"/>
+  <circle cx="32" cy="32" r="6.5" fill="#050709"/>
+  <circle cx="27.5" cy="27.5" r="2.5" fill="#f6f2ee"/>
+</svg>

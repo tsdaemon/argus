@@ -28,8 +28,8 @@ services:
       homepage.name: Argus
       # LAN-local by design, not APP_PUBLIC_URL (the skill's usual pattern): Homepage
       # itself is a LAN dashboard, and /mcp deliberately has no public URL to begin
-      # with. No token in this URL — /breakglass is its own login (generated admin
-      # account, first visit to /login shows the password once).
+      # with. No token in this URL — the whole app is behind the admin login
+      # (ARGUS_ADMIN_PASSWORD below seeds its password).
       homepage.href: "http://${APP_HOSTNAME_LOCAL}/breakglass"
       homepage.description: Home infrastructure agent with chat and MCP interfaces
     # Dev-only host publish isn't needed once Traefik can reach the container
@@ -37,10 +37,30 @@ services:
     ports: !reset []
     environment:
       ARGUS_MCP_TOKEN: ${DEPLOY_ARGUS_MCP_TOKEN}
+      ARGUS_ADMIN_PASSWORD: ${DEPLOY_ARGUS_ADMIN_PASSWORD:?set DEPLOY_ARGUS_ADMIN_PASSWORD in .env.deploy}
       ARGUS_NTFY_TOPIC_URL: ${ARGUS_NTFY_TOPIC_URL:-}
     volumes:
       - ${CONFIG_FILE:-./examples/theseus.argus.yaml}:/config/argus.yaml:ro
-      - argus-state:/var/lib/argus
       - /var/run/docker.sock:/var/run/docker.sock
-      # Only if breakglass.launcher is configured in the mounted config:
-      # - ${ARGUS_LAUNCHER_KEY_PATH}:/run/secrets/argus_launcher_key:ro
+    # Break-glass launcher credentials, injected as Docker secrets. The deploy runs against
+    # a remote context, so a bind mount of a local path would resolve on theseus, not on
+    # this machine; Compose copies secret files from here into the container instead.
+    # Mode 0400 and root ownership because ssh refuses a private key others can read.
+    secrets:
+      - source: argus_launcher_key
+        target: /run/secrets/argus_launcher_key
+        uid: "0"
+        gid: "0"
+        mode: 0400
+      # ssh runs in batch mode, so it needs the target hosts' keys up front.
+      - source: argus_known_hosts
+        target: /root/.ssh/known_hosts
+        uid: "0"
+        gid: "0"
+        mode: 0644
+
+secrets:
+  argus_launcher_key:
+    file: ${ARGUS_LAUNCHER_KEY_PATH:?set ARGUS_LAUNCHER_KEY_PATH in .env.deploy}
+  argus_known_hosts:
+    file: ${ARGUS_KNOWN_HOSTS_PATH:?set ARGUS_KNOWN_HOSTS_PATH in .env.deploy}

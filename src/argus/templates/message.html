@@ -1,0 +1,6 @@
+{% extends "base.html" %}
+{% block title %}argus{% endblock %}
+{% block content %}
+<p>{{ text }}</p>
+<p><a href="{{ back|default('/breakglass') }}">Back</a></p>
+{% endblock %}

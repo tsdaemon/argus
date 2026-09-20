@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% from "_macros.html" import host_picker %}
+{% block title %}argus break-glass{% endblock %}
+{% block content %}
+<div class="top-bar">
+  <h1>Pending break-glass requests</h1>
+  <form method="post" action="/logout"><button type="submit">Log out</button></form>
+</div>
+{% for r in pending %}
+<div class="card">
+  <div class="field"><span class="label">Target</span><br>{{ r.target_host }}</div>
+  <div class="field"><span class="label">Reason</span><br>{{ r.reason }}</div>
+  <div class="field"><span class="label">Evidence</span><br>{{ r.evidence }}</div>
+  <div class="field"><span class="label">Proposed objective</span><br>{{ r.proposed_objective }}</div>
+  <div class="field"><span class="label">Filed</span><br>{{ r.created_at }}</div>
+  {% if hosts %}{{ host_picker(hosts, r.target_host, form="approve-" ~ r.id) }}{% endif %}
+  <div class="actions">
+    <form id="approve-{{ r.id }}" method="post" action="/breakglass/{{ r.id }}/approve">
+      <button class="approve" type="submit">Approve</button>
+    </form>
+    <form method="post" action="/breakglass/{{ r.id }}/deny">
+      <button class="deny" type="submit">Deny</button>
+    </form>
+  </div>
+</div>
+{% else %}
+<p>No pending requests.</p>
+{% endfor %}
+{% if hosts %}<a class="launch-link" href="/launch">Launch a session yourself &rarr;</a>{% endif %}
+{% endblock %}

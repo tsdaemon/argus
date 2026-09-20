@@ -19,20 +19,26 @@ from langgraph.checkpoint.base import BaseCheckpointSaver
 
 from argus.agent.api import build_agent
 from argus.agent.tracing import setup_tracing
+from argus.api.auth import add_auth
 from argus.api.chat import add_chat_routes
 from argus.config import ArgusConfig, load_config
+from argus.db.admin import AdminRepository, SqlAdmin
+from argus.db.breakglass import BreakGlassRepository, SqlBreakGlass
 from argus.db.checkpointer import make_checkpointer
 from argus.db.history import HistoryRepository, SqlHistory, make_engine
 from argus.mcp.auth import StaticTokenVerifier
 from argus.mcp.server import build_http_app, build_server
 from argus.policy import PolicyEngine
 from argus.providers.registry import instantiate_providers
+from argus.webauth import AdminAuth
 
 
 def build_app(
     config: ArgusConfig,
     checkpointer: BaseCheckpointSaver,
     history: HistoryRepository | None = None,
+    breakglass: BreakGlassRepository | None = None,
+    admin: AdminRepository | None = None,
     *,
     frontend_dir: Path | None = None,
     resources: Callable[[], AbstractAsyncContextManager[None]] | None = None,
@@ -40,11 +46,16 @@ def build_app(
     # FastMCP's app needs its own lifespan forwarded into the parent FastAPI
     # constructor (an internal task group otherwise never starts), so it must exist
     # before `FastAPI(...)` is built, even though it's mounted at the end (see above).
+    admin_auth = AdminAuth(admin) if admin is not None else None
     mcp_app = None
     launch_enabled = False
     mcp_token = os.environ.get("ARGUS_MCP_TOKEN")
     if mcp_token:
-        mcp, mcp_providers = build_server(config, auth=StaticTokenVerifier(mcp_token))
+        mcp, mcp_providers = build_server(
+            config,
+            auth=StaticTokenVerifier(mcp_token),
+            dependencies={"breakglass": {"repository": breakglass, "admin": admin_auth}},
+        )
         mcp_app = build_http_app(mcp, mcp_providers)
         launch_enabled = getattr(mcp_providers.get("breakglass"), "launcher", None) is not None
 
@@ -58,6 +69,8 @@ def build_app(
             yield
 
     app = FastAPI(lifespan=lifespan)
+    if admin_auth is not None:  # without an admin store (tests) the app stays open
+        add_auth(app, admin_auth, initial_password=os.environ.get("ARGUS_ADMIN_PASSWORD"))
 
     policy = PolicyEngine(
         None,
@@ -65,7 +78,14 @@ def build_app(
         default_destructive=config.policy.default_destructive,
         overrides=config.policy.overrides,
     )
-    providers = instantiate_providers(config, exclude={"breakglass"})
+    # The agent may file a break-glass request (a READ tool that only records one); it never
+    # approves or launches, which are human routes behind the login.
+    breakglass_ready = breakglass is not None and admin_auth is not None
+    providers = instantiate_providers(
+        config,
+        exclude=() if breakglass_ready else {"breakglass"},
+        dependencies={"breakglass": {"repository": breakglass, "admin": admin_auth}},
+    )
     provider_settings = {name: config.providers[name].settings() for name in providers}
 
     agui_agent = build_agent(
@@ -83,7 +103,7 @@ def build_app(
 
     @app.get("/api/ui-config")
     async def ui_config():
-        return {"launch_enabled": launch_enabled}
+        return {"launch_enabled": launch_enabled, "auth_enabled": admin_auth is not None}
 
     # Production assets are copied into the package by Docker; local builds live
     # in frontend/dist. Register exact routes before the optional root MCP mount.
@@ -130,4 +150,11 @@ def create_app() -> FastAPI:
         finally:
             await engine.dispose()
 
-    return build_app(config, checkpointer, SqlHistory(engine), resources=resources)
+    return build_app(
+        config,
+        checkpointer,
+        SqlHistory(engine),
+        SqlBreakGlass(engine),
+        SqlAdmin(engine),
+        resources=resources,
+    )

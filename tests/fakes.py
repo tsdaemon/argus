@@ -2,8 +2,13 @@
 
 from __future__ import annotations
 
+import secrets
 import uuid
+from dataclasses import replace
 from datetime import UTC, datetime
+
+from argus.db.admin import AdminAccount
+from argus.db.breakglass import PENDING, BreakGlassRequest
 
 
 class InMemoryHistory:
@@ -59,3 +64,57 @@ class InMemoryHistory:
             "created_at": now,
             "updated_at": now,
         }
+
+
+class InMemoryBreakGlass:
+    """A `BreakGlassRepository` with the same semantics as `SqlBreakGlass`.
+
+    `tests/db/test_breakglass_contract.py` runs one suite against both to keep them aligned.
+    """
+
+    def __init__(self) -> None:
+        self._requests: dict[str, BreakGlassRequest] = {}
+
+    async def create_request(
+        self, *, reason: str, target_host: str, evidence: str, proposed_objective: str
+    ) -> BreakGlassRequest:
+        request = BreakGlassRequest(
+            id=secrets.token_hex(4),
+            created_at=datetime.now(UTC).isoformat(),
+            reason=reason,
+            target_host=target_host,
+            evidence=evidence,
+            proposed_objective=proposed_objective,
+            status=PENDING,
+        )
+        self._requests[request.id] = request
+        return request
+
+    async def list_requests(self, *, status: str | None = None) -> list[BreakGlassRequest]:
+        rows = sorted(self._requests.values(), key=lambda r: (r.created_at, r.id), reverse=True)
+        return [r for r in rows if status is None or r.status == status]
+
+    async def get_request(self, request_id: str) -> BreakGlassRequest | None:
+        return self._requests.get(request_id)
+
+    async def set_request_status(self, request_id: str, status: str) -> BreakGlassRequest:
+        if request_id not in self._requests:
+            raise KeyError(f"No break-glass request with id '{request_id}'")
+        self._requests[request_id] = replace(self._requests[request_id], status=status)
+        return self._requests[request_id]
+
+
+class InMemoryAdmin:
+    """An `AdminRepository` with the same semantics as `SqlAdmin`."""
+
+    def __init__(self) -> None:
+        self._admin: AdminAccount | None = None
+
+    async def get_admin(self) -> AdminAccount | None:
+        return self._admin
+
+    async def create_admin_if_absent(self, account: AdminAccount) -> bool:
+        if self._admin is not None:
+            return False
+        self._admin = account
+        return True

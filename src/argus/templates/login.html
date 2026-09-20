@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% block title %}argus login{% endblock %}
+{% block header %}{% endblock %}
+{% block content %}
+<main class="login">
+  <div class="login-brand">{{ mark }}<span>argus</span></div>
+  {% if generated_password %}
+  <div class="password-reveal">
+    <strong>Admin account created.</strong> This password is shown once — save it now
+    (a password manager, not a note you'll lose):
+    <code>{{ generated_password }}</code>
+  </div>
+  {% endif %}
+  <form class="card" method="post" action="/login">
+    {% if error %}<p class="error" role="alert">Wrong username or password.</p>{% endif %}
+    <input type="hidden" name="next" value="{{ next_path }}">
+    <div class="field-group">
+      <label class="label" for="username">Username</label>
+      <input id="username" type="text" name="username" autocomplete="username"
+             autocapitalize="none" value="{{ username }}" required>
+    </div>
+    <div class="field-group">
+      <label class="label" for="password">Password</label>
+      <input id="password" type="password" name="password" autocomplete="current-password"
+             autofocus{% if generated_password %} value="{{ generated_password }}"{% endif %} required>
+    </div>
+    <div class="actions">
+      <button class="primary" type="submit">Log in</button>
+    </div>
+  </form>
+</main>
+{% endblock %}

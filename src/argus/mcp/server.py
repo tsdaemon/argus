@@ -6,6 +6,9 @@ sub-app. `argus.api.app` owns the application; this module never starts a proces
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+from typing import Any
+
 from fastmcp import FastMCP
 from fastmcp.server.auth import AuthProvider
 from fastmcp.server.http import StarletteWithLifespan
@@ -20,10 +23,13 @@ from argus.providers.registry import instantiate_providers
 
 
 def build_server(
-    config: ArgusConfig, *, auth: AuthProvider | None = None
+    config: ArgusConfig,
+    *,
+    auth: AuthProvider | None = None,
+    dependencies: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> tuple[FastMCP, dict[str, Provider]]:
     """Build the FastMCP interface object and return it along with the instantiated providers (keyed
-    by config name), so callers can reach into e.g. the breakglass provider's store
+    by config name), so callers can reach into e.g. the breakglass provider's repository
     without re-reading the config or re-instantiating anything."""
     mcp: FastMCP = FastMCP("argus", auth=auth)
     policy = PolicyEngine(
@@ -33,7 +39,7 @@ def build_server(
         overrides=config.policy.overrides,
     )
 
-    providers = instantiate_providers(config)
+    providers = instantiate_providers(config, dependencies=dependencies)
     for provider_name, provider in providers.items():
         provider.register(mcp, policy, config.providers[provider_name].settings())
 
@@ -47,6 +53,6 @@ def build_http_app(mcp: FastMCP, providers: dict[str, Provider]) -> StarletteWit
 
     breakglass = providers.get("breakglass")
     if isinstance(breakglass, BreakglassProvider):
-        add_breakglass_routes(app, breakglass.store, breakglass.admin_store, breakglass.launcher)
+        add_breakglass_routes(app, breakglass.repository, breakglass.admin, breakglass.launcher)
 
     return app

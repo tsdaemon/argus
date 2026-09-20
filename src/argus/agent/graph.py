@@ -4,8 +4,9 @@ Returns a plain `CompiledStateGraph` — LangGraph stays fully visible; `deepage
 supplies workspace/skills/memory and one fixed "worker" `SubAgent` (cheap
 `config.worker_model`, for routine tool-calling delegation via `task`) alongside the
 main agent (`config.model`, planning/self-reflection). Provider tools are bound via
-`argus.agent.tools` (reuses `PolicyEngine.decide()`); `breakglass` is never bound here —
-that's a human UI action, not an agent tool. Models go through OpenRouter via
+`argus.agent.tools` (reuses `PolicyEngine.decide()`). `breakglass` binds only its
+`request_break_glass` tool, which records a request; approving and launching are human web
+routes, not agent tools. Models go through OpenRouter via
 `ChatOpenAI` regardless of upstream model.
 """
 
@@ -76,8 +77,8 @@ def build_graph(
 ) -> CompiledStateGraph:
     """Assemble the Argus Agent graph.
 
-    `providers` is every *shared* provider to bind tools from — the caller decides which
-    (never `breakglass`). `provider_settings` is keyed the same way. `model`/
+    `providers` is every provider to bind tools from — the caller decides which.
+    `provider_settings` is keyed the same way. `model`/
     `worker_model` override the OpenRouter models `config` would otherwise build, for
     tests.
     """

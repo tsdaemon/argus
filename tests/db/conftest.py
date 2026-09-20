@@ -15,8 +15,10 @@ from alembic import command
 from alembic.config import Config
 from psycopg import sql
 
+from argus.db.admin import SqlAdmin
+from argus.db.breakglass import SqlBreakGlass
 from argus.db.history import SqlHistory, make_engine
-from tests.fakes import InMemoryHistory
+from tests.fakes import InMemoryAdmin, InMemoryBreakGlass, InMemoryHistory
 
 TEST_DATABASE_URL = os.environ.get(
     "ARGUS_TEST_DATABASE_URL", "postgresql://argus:testpass123@localhost:5432/argus"
@@ -63,3 +65,28 @@ def history(request):
     if request.param == "memory":
         return InMemoryHistory()
     return request.getfixturevalue("sql_history")
+
+
+@pytest.fixture
+def sql_breakglass(sql_engine):
+    return SqlBreakGlass(sql_engine)
+
+
+@pytest.fixture(params=["memory", "sql"])
+def breakglass(request):
+    """The same suite runs against the in-memory fake and, when reachable, Postgres."""
+    if request.param == "memory":
+        return InMemoryBreakGlass()
+    return request.getfixturevalue("sql_breakglass")
+
+
+@pytest.fixture
+def sql_admin(sql_engine):
+    return SqlAdmin(sql_engine)
+
+
+@pytest.fixture(params=["memory", "sql"])
+def admin_repo(request):
+    if request.param == "memory":
+        return InMemoryAdmin()
+    return request.getfixturevalue("sql_admin")

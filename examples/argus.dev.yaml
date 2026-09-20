@@ -7,6 +7,21 @@ providers:
     allowed_containers:
       - argus-live-a
       - argus-live-b
+  breakglass:
+    enabled: true
+    approval_url: http://127.0.0.1:8421
+    notify:
+      type: ntfy
+      topic_url: ${ARGUS_NTFY_TOPIC_URL}
+    launcher:
+      type: ssh
+      identity_file: ./.ssh/argus_launcher
+      permission_mode: manual
+      ttl_seconds: 900
+      hosts:
+        theseus:
+          host: 192.168.0.7
+          user: argus-bg
 
 policy:
   default_mutate: require_approval

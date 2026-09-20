@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 
 import pytest
@@ -8,6 +9,8 @@ from langgraph.checkpoint.memory import InMemorySaver
 
 from argus.api.app import build_app
 from argus.config import AgentConfig, ArgusConfig, ProviderEntry
+from argus.webauth import SESSION_COOKIE, AdminAuth, sign_session
+from tests.fakes import InMemoryAdmin, InMemoryBreakGlass
 
 
 def make_config(tmp_path: Path) -> ArgusConfig:
@@ -114,8 +117,10 @@ def test_frontend_assets_and_launcher_availability(
     config = make_config(tmp_path)
     config.providers["breakglass"] = ProviderEntry(
         enabled=True,
-        store_path=str(tmp_path / "breakglass.sqlite"),
-        launcher={"type": "ssh", "host": "test-host", "user": "operator"}
+        launcher={
+            "type": "ssh",
+            "hosts": {"test-host": {"host": "test-host", "user": "operator"}},
+        }
         if launcher_enabled
         else None,
     )
@@ -123,15 +128,52 @@ def test_frontend_assets_and_launcher_availability(
     (frontend / "assets").mkdir(parents=True)
     (frontend / "index.html").write_text("<title>Argus chat</title>")
     (frontend / "assets" / "app.js").write_text("/* UI bundle */")
-    app = build_app(config, InMemorySaver(), frontend_dir=frontend)
+    admin_repository = InMemoryAdmin()
+    app = build_app(
+        config,
+        InMemorySaver(),
+        breakglass=InMemoryBreakGlass(),
+        admin=admin_repository,
+        frontend_dir=frontend,
+    )
     with TestClient(app) as client:
+        # The whole app sits behind the admin login; only /mcp, /login and health are open.
+        gate = client.get("/", headers={"accept": "text/html"}, follow_redirects=False)
+        assert gate.status_code == 303 and gate.headers["location"].startswith("/login")
+        assert client.get("/api/ui-config").status_code == 401
+        assert client.get("/agent/health").status_code == 200
+
+        account, _ = asyncio.run(AdminAuth(admin_repository).get_or_create())
+        client.cookies.set(SESSION_COOKIE, sign_session(account.session_secret, account.username))
+
         assert "Argus chat" in client.get("/").text
         assert client.get("/assets/app.js").text == "/* UI bundle */"
         assert client.get("/api/ui-config").json() == {
             "launch_enabled": mcp_enabled and launcher_enabled,
+            "auth_enabled": True,
         }
         if mcp_enabled and launcher_enabled:
-            response = client.get("/launch", follow_redirects=False)
-            assert response.status_code == 303
-            assert response.headers["location"].startswith("/login")
+            assert client.get("/launch", follow_redirects=False).status_code == 200
         assert client.post("/agent", json={}).status_code == 422
+
+
+@pytest.mark.parametrize("with_store", [True, False])
+def test_the_agent_gets_the_break_glass_provider_only_when_a_store_is_supplied(
+    tmp_path, monkeypatch, with_store
+):
+    monkeypatch.delenv("ARGUS_MCP_TOKEN", raising=False)
+    config = make_config(tmp_path)
+    config.providers["breakglass"] = ProviderEntry(enabled=True)
+    handed_to_agent: dict = {}
+
+    def capture(**kwargs):
+        handed_to_agent.update(kwargs["providers"])
+        return object()
+
+    monkeypatch.setattr("argus.api.app.build_agent", capture)
+    monkeypatch.setattr("argus.api.app.add_chat_routes", lambda *args: None)
+
+    stores = {"breakglass": InMemoryBreakGlass(), "admin": InMemoryAdmin()} if with_store else {}
+    build_app(config, InMemorySaver(), **stores)
+
+    assert ("breakglass" in handed_to_agent) is with_store
