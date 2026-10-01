@@ -1247,3 +1247,16 @@ store, and tools cannot read them. Verified live: a generated PNG and PDF, conve
 adapter, sent to `google/gemini-3.7-flash` through OpenRouter, came back as "red" and the code
 printed in the PDF. A Playwright test attaches a `.log` with no MIME type and a PNG and checks
 the request: the log is inlined as text, the image stays an image part, and the run completes.
+
+### Long conversations no longer virtualize — 2026-10-01
+
+Scrolling jumped around in long conversations. Past 50 messages CopilotKit's message list
+switches to `@tanstack/react-virtual` with a fixed 100 px row estimate inside its
+`use-stick-to-bottom` scroller; long markdown answers and tool cards are far taller, so each
+newly measured row resizes the content and the two fight over the scroll position. `App.tsx`
+now passes a `messageView` with a `children` render function, which CopilotKit treats as
+custom rendering and never virtualizes; `MessageList` keeps the default list's test id, classes,
+interrupt element, and cursor. Every message is rendered, which is fine at one operator's scale.
+A Playwright test sends 26 turns (52 messages) and checks the first message is still in the DOM
+with no virtualized rows; it fails without the change. The fix has not yet been checked by hand
+in the browser on the conversation where it was seen.

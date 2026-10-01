@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, type ComponentProps } from "react";
 import {
-  CopilotKitProvider, CopilotChat, CopilotChatConfigurationProvider,
+  CopilotKitProvider, CopilotChat, CopilotChatConfigurationProvider, CopilotChatMessageView,
   useAgent, useCopilotKit, useInterrupt,
 } from "@copilotkit/react-core/v2";
 import {
@@ -13,6 +13,20 @@ import logo from "./logo.png";
 const toolRenderers = [ToolCallCard];
 const pageSize = 100;
 const collapsedKey = "argus.sidebar.collapsed";
+
+type MessageListProps = Parameters<NonNullable<ComponentProps<typeof CopilotChatMessageView>["children"]>>[0];
+
+// Supplying the list's children turns off CopilotKit's virtualization, which it applies past
+// 50 messages: its estimated row heights fight the stick-to-bottom scroller and the scroll
+// position jumps around in long conversations.
+function MessageList({ messageElements, interruptElement, isRunning, messages }: MessageListProps) {
+  return <div data-testid="copilot-message-list" className="copilotKitMessages cpk:flex cpk:flex-col">
+    {messageElements}
+    {interruptElement}
+    {isRunning && messages.at(-1)?.role !== "reasoning" && <div className="cpk:mt-2"><CopilotChatMessageView.Cursor /></div>}
+  </div>;
+}
+const messageView = { children: MessageList };
 
 function readCollapsed() {
   try { return localStorage.getItem(collapsedKey) === "1"; } catch { return false; }
@@ -69,7 +83,7 @@ function Chat({ thread, onBusy, onFinished }: {
   </section>}
   {uploadError && <div className="resume-notice" role="alert">{uploadError}</div>}
   <CopilotChat
-    threadId={thread.id} className="argus-chat"
+    threadId={thread.id} className="argus-chat" messageView={messageView}
     attachments={{
       enabled: true, accept: attachmentAccept, maxSize: attachmentMaxSize,
       onUploadFailed: (failure) => setUploadError(`Could not attach that file: ${failure.message}`),

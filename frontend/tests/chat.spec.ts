@@ -153,3 +153,13 @@ test("attachments: images go as images, text files are inlined as text", async (
   expect(parts[2].source?.mimeType).toBe("image/png");
   await expect(page.getByText(/Read-only review complete/)).toBeVisible();
 });
+
+test("a long conversation renders every message instead of virtualizing", async ({ page }) => {
+  await start(page);
+  for (let i = 1; i <= 26; i++) {
+    await send(page, `Question ${i}`);
+    await expect(page.getByText(`Read-only review complete: Question ${i}`, { exact: true })).toBeVisible();
+  }
+  await expect(page.locator("[data-message-id]").first()).toContainText("Question 1");
+  await expect(page.locator("[data-testid=copilot-message-list] [data-index]")).toHaveCount(0);
+});
