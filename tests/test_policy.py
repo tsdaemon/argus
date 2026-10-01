@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from argus.policy import PolicyDecision, PolicyEngine, ToolClass
+from argus.policy import CallClassification, PolicyDecision, PolicyEngine, ToolClass
 
 
 class FakeMCP:
@@ -107,3 +107,83 @@ async def test_mutate_tool_refuses_when_not_approved():
     with pytest.raises(PermissionError):
         await mcp.registered["mutate_thing"](value=1, ctx="fake-ctx")
     assert len(backend.calls) == 1
+
+
+def classified(tool_class: ToolClass):
+    async def classify(args):
+        return CallClassification(tool_class, f"classified {args['command']}")
+
+    return classify
+
+
+async def run_classified(tool_class: ToolClass, *, approve=True, **engine_kwargs):
+    engine, backend = make_engine(approve=approve, **engine_kwargs)
+    mcp = FakeMCP()
+    ran = []
+
+    async def shell(command: str, ctx=None) -> str:
+        ran.append(command)
+        return "ok"
+
+    engine.register(
+        mcp, tool_id="ssh.router", tool_class=ToolClass.MUTATE, summary="run",
+        classify=classified(tool_class),
+    )(shell)
+    result = await mcp.registered["shell"](command="ip route", ctx="ctx")
+    return result, ran, backend
+
+
+@pytest.mark.asyncio
+async def test_classified_read_call_runs_without_asking():
+    result, ran, backend = await run_classified(ToolClass.READ)
+
+    assert result == "ok" and ran == ["ip route"]
+    assert backend.calls == []
+
+
+@pytest.mark.asyncio
+async def test_classified_mutate_call_asks_with_the_classifier_note():
+    _, ran, backend = await run_classified(ToolClass.MUTATE)
+
+    assert ran == ["ip route"]
+    (call,) = backend.calls
+    assert "classified ip route" in call["summary"]
+
+
+@pytest.mark.asyncio
+async def test_classified_mutate_call_does_not_run_when_declined():
+    with pytest.raises(PermissionError):
+        await run_classified(ToolClass.MUTATE, approve=False)
+
+
+@pytest.mark.asyncio
+async def test_classified_destructive_call_is_refused_without_asking():
+    engine, backend = make_engine()
+    mcp = FakeMCP()
+
+    async def shell(command: str, ctx=None) -> str:
+        raise AssertionError("must not run")
+
+    engine.register(
+        mcp, tool_id="ssh.router", tool_class=ToolClass.MUTATE, summary="run",
+        classify=classified(ToolClass.DESTRUCTIVE),
+    )(shell)
+
+    with pytest.raises(PermissionError, match="refused"):
+        await mcp.registered["shell"](command="mtd-erase2 nvram", ctx="ctx")
+    assert backend.calls == []
+
+
+def test_denying_a_classified_tool_removes_it():
+    engine, _ = make_engine(overrides={"ssh.router": PolicyDecision.DENY})
+    mcp = FakeMCP()
+
+    async def shell(command: str, ctx=None) -> str:
+        return "ok"
+
+    engine.register(
+        mcp, tool_id="ssh.router", tool_class=ToolClass.MUTATE, summary="run",
+        classify=classified(ToolClass.READ),
+    )(shell)
+
+    assert mcp.registered == {}

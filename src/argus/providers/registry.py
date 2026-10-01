@@ -13,10 +13,12 @@ from argus.config import ArgusConfig
 from argus.providers.base import Provider
 from argus.providers.breakglass_provider import BreakglassProvider
 from argus.providers.docker_provider import DockerProvider
+from argus.providers.ssh_provider import SshProvider
 
 PROVIDER_REGISTRY: dict[str, type[Provider]] = {
     "docker": DockerProvider,
     "breakglass": BreakglassProvider,
+    "ssh": SshProvider,
 }
 
 

@@ -121,3 +121,35 @@ test("a conversation can be deleted after confirming, and stays deleted", async 
   await page.reload();
   await expect(page.locator(".thread-row", { hasText: "Delete me please" })).toHaveCount(0);
 });
+
+test("a tool call shows its key arguments and classification", async ({ page }) => {
+  await start(page);
+  await send(page, "What is the router uptime?");
+  const card = page.locator(".tool-call").filter({ hasText: "ssh_run" });
+  await expect(card.getByText("router $ uptime")).toBeVisible();
+  await expect(card.locator(".tool-call-risk")).toHaveText("read");
+  await card.getByRole("button").click();
+  await expect(card.getByText("fixed: read 1.00")).toBeVisible();
+  const result = card.locator("pre").last();
+  await expect(result).toContainText("exit 0");
+  await expect(result).not.toContainText("[risk:");
+  await card.screenshot({ path: "/tmp/argus-tool-call.png" });
+});
+
+test("attachments: images go as images, text files are inlined as text", async ({ page }) => {
+  await start(page);
+  await page.locator('input[type="file"]').setInputFiles([
+    { name: "router.log", mimeType: "", buffer: Buffer.from("wl0: link down\nwl0: link up\n") },
+    { name: "shot.png", mimeType: "image/png", buffer: Buffer.from("89504e470d0a1a0a", "hex") },
+  ]);
+  await expect(page.getByText("router.log")).toBeVisible();
+  const sent = page.waitForRequest((r) => r.url().endsWith("/agent") && r.method() === "POST");
+  await send(page, "What happened on the router?");
+  const body = (await sent).postDataJSON();
+  const parts = body.messages[0].content as { type: string; text?: string; source?: { mimeType: string } }[];
+  expect(parts.map((p) => p.type)).toEqual(["text", "text", "image"]);
+  expect(parts[1].text).toContain("Attached file router.log:");
+  expect(parts[1].text).toContain("wl0: link down");
+  expect(parts[2].source?.mimeType).toBe("image/png");
+  await expect(page.getByText(/Read-only review complete/)).toBeVisible();
+});

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 from deepagents import GeneralPurposeSubagentProfile, HarnessProfile, register_harness_profile
 from deepagents._models import get_model_provider
 from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
@@ -14,6 +15,7 @@ from argus.policy import PolicyDecision, PolicyEngine
 from argus.providers.breakglass_provider import BreakglassProvider
 from argus.providers.docker_provider import DockerProvider
 from argus.webauth import AdminAuth
+from tests.api.test_approvals import ToolCallingModel
 from tests.fakes import InMemoryAdmin, InMemoryBreakGlass
 
 # graph.py disables the "general purpose subagent" for provider "openai" (what
@@ -89,22 +91,50 @@ def test_denied_tool_is_never_bound(tmp_path: Path):
     assert "docker_get_container_logs" not in bound_tool_names(graph)
 
 
-def test_creates_default_agents_md_when_missing(tmp_path: Path):
-    _graph, config = build(tmp_path)
+def test_seeds_conventions_and_an_empty_memory_index(tmp_path: Path):
+    _, config = build(tmp_path)
 
-    agents_md = Path(config.workspace_root) / "AGENTS.md"
-    assert agents_md.is_file()
-    assert "Argus Agent memory" in agents_md.read_text()
+    workspace = Path(config.workspace_root)
+    assert (workspace / "AGENTS.md").read_text().startswith("# Conventions")
+    assert (workspace / "memory" / "INDEX.md").read_text().startswith("# Memory index")
 
 
-def test_does_not_overwrite_existing_agents_md(tmp_path: Path):
+def test_does_not_overwrite_existing_memory(tmp_path: Path):
     workspace_root = tmp_path / "workspace"
-    workspace_root.mkdir(parents=True)
-    (workspace_root / "AGENTS.md").write_text("custom memory content")
+    (workspace_root / "memory").mkdir(parents=True)
+    (workspace_root / "AGENTS.md").write_text("custom conventions")
+    (workspace_root / "memory" / "INDEX.md").write_text("custom index")
 
     build(tmp_path)
 
-    assert (workspace_root / "AGENTS.md").read_text() == "custom memory content"
+    assert (workspace_root / "AGENTS.md").read_text() == "custom conventions"
+    assert (workspace_root / "memory" / "INDEX.md").read_text() == "custom index"
+
+
+@pytest.mark.asyncio
+async def test_the_model_sees_conventions_index_and_argus_memory_rules(tmp_path: Path):
+    workspace_root = tmp_path / "workspace"
+    (workspace_root / "memory").mkdir(parents=True)
+    (workspace_root / "AGENTS.md").write_text("# Conventions\n- be brief")
+    (workspace_root / "memory" / "INDEX.md").write_text("- [Router model](router-model.md): RT-AC88U")
+    seen: list = []
+
+    class Recording(ToolCallingModel):
+        def _generate(self, messages, stop=None, **kwargs):
+            seen.append(messages)
+            return super()._generate(messages, stop=stop, **kwargs)
+
+    graph = build_graph(
+        config=AgentConfig(workspace_root=str(workspace_root)),
+        providers={}, provider_settings={}, policy=PolicyEngine(), checkpointer=InMemorySaver(),
+        model=Recording(tool_calls=[]), worker_model=fake_model(),
+    )
+    await graph.ainvoke({"messages": [("user", "hi")]}, {"configurable": {"thread_id": "t"}})
+
+    system = str(seen[0][0].content)
+    assert "- be brief" in system and "[Router model](router-model.md)" in system
+    assert "<memory_rules>" in system
+    assert "Slack" not in system  # deepagents' generic memory examples are gone
 
 
 def test_creates_skills_directory(tmp_path: Path):

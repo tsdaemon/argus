@@ -9,6 +9,9 @@ calls it is decided *here*, from configuration, not by the provider and not by t
 - DESTRUCTIVE tools are, by default, never registered at all — they don't exist in the
   tool list the agent sees, which is a stronger guarantee than refusing at call time.
 
+A tool whose risk depends on its arguments (a shell command) also supplies a `classify`
+function. Its class is then decided per call, and the same mapping turns it into a decision.
+
 This module has no knowledge of Docker, systemd, or any other backend. It only knows how
 to decide and enforce.
 """
@@ -18,6 +21,7 @@ from __future__ import annotations
 import functools
 import inspect
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from enum import Enum
 from typing import Any, TypeVar
 
@@ -32,6 +36,17 @@ class ToolClass(str, Enum):
     READ = "read"
     MUTATE = "mutate"
     DESTRUCTIVE = "destructive"
+
+
+@dataclass(frozen=True)
+class CallClassification:
+    """One call's class, from a tool's `classify` function, and why (shown on approval)."""
+
+    tool_class: ToolClass
+    note: str = ""
+
+
+Classifier = Callable[[dict[str, Any]], Awaitable[CallClassification]]
 
 
 class PolicyDecision(str, Enum):
@@ -90,6 +105,7 @@ class PolicyEngine:
         tool_id: str,
         tool_class: ToolClass,
         summary: str,
+        classify: Classifier | None = None,
         **tool_kwargs: Any,
     ) -> Callable[[F], F | None]:
         """Decorator a provider uses instead of `@mcp.tool` directly.
@@ -102,12 +118,19 @@ class PolicyEngine:
 
         `summary` is the human-readable description shown in the approval prompt
         (e.g. "restart the qbittorrent container"); providers pass one per tool.
+
+        With `classify`, the decision above only says whether the tool exists; each call is
+        then classified from its arguments and allowed, refused, or sent for approval.
         """
         decision = self.decide(tool_id, tool_class)
 
         def decorator(fn: F) -> F | None:
             if decision is PolicyDecision.DENY:
                 return None
+
+            if classify is not None:
+                gated = self._classified_gate(fn, tool_id=tool_id, summary=summary, classify=classify)
+                return mcp.tool(**tool_kwargs)(gated)
 
             if decision is PolicyDecision.ALLOW:
                 registered = mcp.tool(**tool_kwargs)(fn)
@@ -120,29 +143,65 @@ class PolicyEngine:
 
         return decorator
 
+
     def _gate(self, fn: F, *, tool_id: str, summary: str) -> F:
-        if self._approval_backend is None:
-            raise RuntimeError(
-                f"'{tool_id}' requires approval but this PolicyEngine has no ApprovalBackend."
-            )
-        approval_backend = self._approval_backend
+        approval_backend = self._require_backend(tool_id)
 
         @functools.wraps(fn)
         async def wrapper(*args: Any, **kwargs: Any) -> Any:
-            ctx = _find_context(fn, args, kwargs)
-            approved = await approval_backend.request(
-                ctx,
-                action=tool_id,
-                summary=summary,
-                details={"args": _redact(kwargs)},
-            )
-            if not approved:
+            await _approve(approval_backend, fn, args, kwargs, tool_id=tool_id, summary=summary)
+            return await fn(*args, **kwargs)
+
+        return wrapper  # type: ignore[return-value]
+
+    def _classified_gate(
+        self, fn: F, *, tool_id: str, summary: str, classify: Classifier
+    ) -> F:
+        approval_backend = self._require_backend(tool_id)
+
+        @functools.wraps(fn)
+        async def wrapper(*args: Any, **kwargs: Any) -> Any:
+            classification = await classify(_redact(kwargs))
+            decision = self.decide(tool_id, classification.tool_class)
+            if decision is PolicyDecision.DENY:
                 raise PermissionError(
-                    f"'{tool_id}' was not approved. No action was taken."
+                    f"'{tool_id}' refused this call. {classification.note}".strip()
+                )
+            if decision is PolicyDecision.REQUIRE_APPROVAL:
+                await _approve(
+                    approval_backend, fn, args, kwargs, tool_id=tool_id,
+                    summary=f"{summary}\n\n{classification.note}".strip(),
                 )
             return await fn(*args, **kwargs)
 
         return wrapper  # type: ignore[return-value]
+
+    def _require_backend(self, tool_id: str) -> ApprovalBackend:
+        if self._approval_backend is None:
+            raise RuntimeError(
+                f"'{tool_id}' requires approval but this PolicyEngine has no ApprovalBackend."
+            )
+        return self._approval_backend
+
+
+async def _approve(
+    approval_backend: ApprovalBackend,
+    fn: Callable[..., Any],
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+    *,
+    tool_id: str,
+    summary: str,
+) -> None:
+    ctx = _find_context(fn, args, kwargs)
+    approved = await approval_backend.request(
+        ctx,
+        action=tool_id,
+        summary=summary,
+        details={"args": _redact(kwargs)},
+    )
+    if not approved:
+        raise PermissionError(f"'{tool_id}' was not approved. No action was taken.")
 
 
 def _find_context(fn: Callable[..., Any], args: tuple[Any, ...], kwargs: dict[str, Any]) -> Any:

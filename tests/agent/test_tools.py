@@ -1,9 +1,13 @@
 from __future__ import annotations
 
-import pytest
+from types import SimpleNamespace
 
-from argus.agent.tools import external_name, langchain_bind
-from argus.policy import PolicyDecision, PolicyEngine, ToolClass
+import pytest
+from langchain_core.messages import AIMessage
+
+from argus.agent.classification import METADATA_KEY
+from argus.agent.tools import classification_middleware, external_name, langchain_bind
+from argus.policy import CallClassification, PolicyDecision, PolicyEngine, ToolClass
 from argus.providers.base import ToolSpec
 from argus.providers.docker_provider import DockerProvider
 
@@ -112,3 +116,78 @@ async def test_bound_tool_strips_ctx_from_schema_but_still_injects_it():
     assert "ctx" not in tool.args_schema.model_fields
     await tool.ainvoke({"value": 1})
     assert seen_ctx == [None]
+
+
+
+def classified_spec(tool_class: ToolClass, ran: list) -> ToolSpec:
+    async def router(command: str, ctx=None) -> str:
+        ran.append(command)
+        return "ok"
+
+    async def classify(args):
+        return CallClassification(tool_class, f"note for {args['command']}")
+
+    return ToolSpec(
+        tool_id="ssh.router",
+        tool_class=ToolClass.MUTATE,
+        summary="Run on the router.",
+        fn=router,
+        classify=classify,
+    )
+
+
+def state_with(tool_class: ToolClass | None, command: str = "ip route") -> dict:
+    """Conversation state whose last model message calls `ssh_router` once, with the
+    classification the middleware would have stored (or none)."""
+    message = AIMessage(
+        content="",
+        tool_calls=[{"name": "ssh_router", "args": {"command": command}, "id": "call-1"}],
+    )
+    if tool_class is not None:
+        message.response_metadata[METADATA_KEY] = {
+            "call-1": {"tool_class": tool_class.value, "note": f"note for {command}"}
+        }
+    return {"messages": [message]}
+
+
+def interrupt_wanted(config, state: dict) -> bool:
+    (tool_call,) = state["messages"][-1].tool_calls
+    return config["when"](SimpleNamespace(tool_call=tool_call, state=state))
+
+
+@pytest.mark.parametrize(
+    ("tool_class", "asks"),
+    [
+        (ToolClass.READ, False),
+        (ToolClass.MUTATE, True),
+        (ToolClass.DESTRUCTIVE, False),
+        (None, True),  # nothing stored: never run unseen
+    ],
+)
+def test_classified_tool_interrupts_from_the_stored_classification(tool_class, asks):
+    tools, interrupt_on = langchain_bind(make_policy(), [classified_spec(ToolClass.READ, [])])
+
+    assert [t.name for t in tools] == ["ssh_router"]
+    assert interrupt_wanted(interrupt_on["ssh_router"], state_with(tool_class)) is asks
+
+
+def test_classified_interrupt_description_carries_the_stored_note():
+    _, interrupt_on = langchain_bind(make_policy(), [classified_spec(ToolClass.MUTATE, [])])
+    state = state_with(ToolClass.MUTATE, "service restart_wan")
+    (tool_call,) = state["messages"][-1].tool_calls
+
+    description = interrupt_on["ssh_router"]["description"](tool_call, state, None)
+
+    assert description == "Approve `ssh.router`? note for service restart_wan"
+
+
+def test_classification_middleware_covers_only_classified_bound_tools():
+    async def plain(value: int) -> str:
+        return "x"
+
+    plain_spec = ToolSpec(tool_id="x.plain", tool_class=ToolClass.READ, summary="s", fn=plain)
+
+    assert classification_middleware(make_policy(), [plain_spec]) is None
+    denied = make_policy(overrides={"ssh.router": PolicyDecision.DENY})
+    assert classification_middleware(denied, [classified_spec(ToolClass.READ, [])]) is None
+    assert classification_middleware(make_policy(), [classified_spec(ToolClass.READ, [])]) is not None

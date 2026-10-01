@@ -1,13 +1,14 @@
-"""Real API and agent graph for Playwright; deterministic model, fake Docker, in-memory stores.
+"""Real API and agent graph for Playwright; deterministic model, fake Docker and ssh, a fixed
+command classifier, in-memory stores.
 
 No Postgres and no model API key are needed, and no operational provider ever connects to
-a daemon.
+a daemon or a host.
 """
 
 import asyncio
 import os
 import tempfile
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import uvicorn
 from deepagents import GeneralPurposeSubagentProfile, HarnessProfile, register_harness_profile
@@ -17,6 +18,7 @@ from langgraph.checkpoint.memory import InMemorySaver
 
 from argus.api.app import build_app
 from argus.config import AgentConfig, ArgusConfig, ProviderEntry
+from argus.policy import CallClassification, ToolClass
 from tests.api.test_approvals import ToolCallingModel, restart_call
 from tests.fakes import InMemoryHistory
 
@@ -30,6 +32,12 @@ class BrowserModel(ToolCallingModel):
         results = [m for m in messages[last_user + 1 :] if isinstance(m, ToolMessage)]
         if results:
             response = AIMessage(content=f"Operation reviewed. {results[-1].content}")
+        elif "uptime" in question.lower():
+            args = {"host": "router", "command": "uptime"}
+            response = AIMessage(
+                content="",
+                tool_calls=[{"name": "ssh_run", "args": args, "id": "uptime", "type": "tool_call"}],
+            )
         elif "restart" in question.lower():
             names = (
                 ["example-service", "second-service"] if "both" in question else ["example-service"]
@@ -47,6 +55,11 @@ class BrowserModel(ToolCallingModel):
         return self._generate(messages, stop=stop, **kwargs)
 
 
+class ReadClassifier:
+    async def classify(self, command: str) -> CallClassification:
+        return CallClassification(ToolClass.READ, "fixed: read 1.00")
+
+
 register_harness_profile(
     "browsermodel",
     HarnessProfile(general_purpose_subagent=GeneralPurposeSubagentProfile(enabled=False)),
@@ -59,14 +72,25 @@ async def serve():
     docker.containers.get.side_effect = lambda name: MagicMock(
         restart=lambda **_: operations.append(name)
     )
+    ssh = MagicMock(returncode=0)
+    ssh.wait = AsyncMock(return_value=0)
+    ssh.stdout.read = AsyncMock(return_value=b" 23:42:15 up 3:07,  load average: 0.10\r\n")
+    ssh.stderr.read = AsyncMock(return_value=b"")
     with (
         tempfile.TemporaryDirectory(prefix="argus-ui-") as workspace,
         patch("argus.agent.graph._build_model", lambda *_: BrowserModel(tool_calls=[])),
         patch("argus.providers.docker_provider.docker.DockerClient", lambda **_: docker),
+        patch("argus.providers.ssh_provider.build_classifier", lambda *_, **__: ReadClassifier()),
+        patch("asyncio.create_subprocess_exec", AsyncMock(return_value=ssh)),
     ):
         config = ArgusConfig(
             agent=AgentConfig(workspace_root=workspace),
-            providers={"docker": ProviderEntry(enabled=True)},
+            providers={
+                "docker": ProviderEntry(enabled=True),
+                "ssh": ProviderEntry(
+                    enabled=True, hosts={"router": {"host": "192.0.2.1", "description": "router"}}
+                ),
+            },
         )
         app = build_app(config, InMemorySaver(), InMemoryHistory())
 

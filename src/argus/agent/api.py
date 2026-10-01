@@ -6,7 +6,9 @@ routing, mounting MCP, ...), never how it was built.
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
+import logging
+from collections.abc import AsyncIterator, Mapping
+from types import MappingProxyType
 from typing import Any
 
 from ag_ui.core import (
@@ -20,13 +22,21 @@ from ag_ui.core import (
 )
 from ag_ui_langgraph import LangGraphAgent
 from ag_ui_langgraph.utils import langchain_messages_to_agui
+from langchain_core.messages import AIMessage, ToolMessage
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.types import Command
 
+from argus.agent.classification import METADATA_KEY, stored_classification
 from argus.agent.graph import build_graph
+from argus.agent.tools import external_name
 from argus.config import AgentConfig
-from argus.policy import PolicyEngine
+from argus.policy import PolicyEngine, ToolClass
 from argus.providers.base import Provider
+
+logger = logging.getLogger(__name__)
+
+# `forwardedProps` key of a run that continues a stalled thread from its checkpoint.
+RESUME_PROP = "argus_resume"
 
 
 class _InvalidApproval(ValueError):
@@ -39,7 +49,42 @@ class ArgusAgent(LangGraphAgent):
     The upstream single-response default drops the interrupt ID; its cancellation and
     multi-response sentinels are not LangChain HITL responses. Validate before creating
     a Command so an invalid answer cannot be persisted into the checkpoint.
+
+    A run that died partway (a restart, a crash) leaves a checkpoint with a `next` step and
+    no pending approval. `run_state` reports it, and a run with `forwardedProps.argus_resume`
+    continues it from that checkpoint instead of starting over at the model.
     """
+
+    # Provider tools' static classes by LangChain name, for reporting pending calls; set by
+    # `build_agent` and carried across the per-request clone.
+    tool_classes: Mapping[str, ToolClass] = MappingProxyType({})
+    _resuming = False
+
+    def clone(self) -> ArgusAgent:
+        copy = super().clone()
+        copy.tool_classes = self.tool_classes
+        return copy
+
+    async def run_state(self, thread_id: str) -> dict[str, Any]:
+        """Whether the thread's last run stopped partway, and the tool calls a resume would
+        run, with their classes. Says nothing about whether a run is live right now."""
+        state = await self.graph.aget_state({"configurable": {"thread_id": thread_id}})
+        if not state.next or self._collect_interrupts(state.tasks):
+            return {"stalled": False, "pending": []}
+        messages = (state.values or {}).get("messages", [])
+        answered = {m.tool_call_id for m in messages if isinstance(m, ToolMessage)}
+        last_ai = next((m for m in reversed(messages) if isinstance(m, AIMessage)), None)
+        pending = []
+        for call in last_ai.tool_calls if last_ai else []:
+            if call["id"] in answered:
+                continue
+            if METADATA_KEY in last_ai.response_metadata:
+                tool_class = stored_classification(messages, call["id"]).tool_class
+            else:
+                # Workspace tools and `task` are not provider tools; none needs approval.
+                tool_class = self.tool_classes.get(call["name"], ToolClass.READ)
+            pending.append({"name": call["name"], "args": call["args"], "class": tool_class.value})
+        return {"stalled": True, "pending": pending}
 
     async def thread_snapshot(self, thread_id: str) -> tuple[list, list[Interrupt]]:
         """Read a checkpoint without starting a run or executing pending tools."""
@@ -56,11 +101,18 @@ class ArgusAgent(LangGraphAgent):
 
     async def run(self, input: RunAgentInput) -> AsyncIterator[BaseEvent]:
         try:
-            if isinstance(input.forwarded_props, dict) and any(
-                key.lower() == "command" for key in input.forwarded_props
-            ):
+            props = input.forwarded_props if isinstance(input.forwarded_props, dict) else {}
+            if any(key.lower() == "command" for key in props):
                 raise _InvalidApproval("Use resume[] with an interruptId to answer an approval.")
+            if props.get(RESUME_PROP):
+                if input.messages or input.resume:
+                    raise _InvalidApproval("A resume run carries no messages or approvals.")
+                if not (await self.run_state(input.thread_id))["stalled"]:
+                    raise _InvalidApproval("This conversation has no interrupted run to resume.")
+                self._resuming = True
+            started = False
             async for event in super().run(input):
+                started = started or event.type == EventType.RUN_STARTED
                 yield event
         except _InvalidApproval as exc:
             # Resume translation happens before the upstream RUN_STARTED event.
@@ -68,6 +120,23 @@ class ArgusAgent(LangGraphAgent):
                 type=EventType.RUN_STARTED, thread_id=input.thread_id, run_id=input.run_id
             )
             yield RunErrorEvent(type=EventType.RUN_ERROR, code="INVALID_APPROVAL", message=str(exc))
+        except Exception as exc:
+            # End the stream with an error the UI shows, instead of a dropped connection that
+            # leaves the run's cards pending. The checkpoint keeps what finished, so a run
+            # that failed partway reads as stalled and can be resumed.
+            logger.exception("Agent run failed on thread %s", input.thread_id)
+            if not started:
+                yield RunStartedEvent(
+                    type=EventType.RUN_STARTED, thread_id=input.thread_id, run_id=input.run_id
+                )
+            yield RunErrorEvent(type=EventType.RUN_ERROR, code=type(exc).__name__, message=str(exc))
+
+    def get_stream_kwargs(self, input: Any, *args: Any, **kwargs: Any) -> dict[str, Any]:
+        # `None` continues from the checkpoint; the adapter would otherwise pass the message
+        # state as new input and the graph would start over at the model. "sync" writes each
+        # step's checkpoint before the next starts, so a crash cannot lose the last one.
+        stream_kwargs = super().get_stream_kwargs(None if self._resuming else input, *args, **kwargs)
+        return {**stream_kwargs, "durability": "sync"}
 
     def _build_command_from_agui_resume(
         self,
@@ -125,9 +194,18 @@ def build_agent(
         policy=policy,
         checkpointer=checkpointer,
     )
-    return ArgusAgent(
+    agent = ArgusAgent(
         name="argus-agent",
         graph=graph,
+        # The adapter builds each run's config with `ensure_config`, which fills in LangChain's
+        # default limit of 25 steps and overrides the 9,999 deepagents sets on the graph.
+        config={"recursion_limit": config.recursion_limit},
         emit_interrupt_outcome=True,
         enable_legacy_on_interrupt_event=False,
     )
+    agent.tool_classes = {
+        external_name(spec.tool_id): spec.tool_class
+        for name, provider in providers.items()
+        for spec in provider.tool_specs(provider_settings.get(name, {}))
+    }
+    return agent

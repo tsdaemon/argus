@@ -60,6 +60,9 @@ class AgentConfig(BaseModel):
     worker_model: str = "stepfun/step-3.7-flash"
     model_base_url: str = "https://openrouter.ai/api/v1"
     api_key: str = ""
+    # Graph steps per run; a model turn and its tool calls take about three. Caps a runaway
+    # loop; a run that hits it stops with an error and can be resumed.
+    recursion_limit: int = 200
     otel: OtelConfig = OtelConfig()
 
 

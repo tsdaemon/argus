@@ -131,7 +131,10 @@ Agreed 2026-09-20. Each item gets its own design pass before it is built.
   the agent chooses one; how to keep it read-only so a rendered component can never become
   a way around the approval flow; and how it is tested without a browser-only path.
 
-Provider roadmap beyond the current Docker/break-glass tools: `systemd` (status,
+- `[ ]` **Deploy the router tool**: add `argus_ssh` and the router's host key to the
+  deploy overlay's secrets and `examples/theseus.argus.yaml`.
+
+Provider roadmap beyond the current Docker/break-glass/router-shell tools: `systemd` (status,
 journal, restart), `disk`/SMART, and `network` probes. An asynchronous MCP approval-queue
 backend is also unbuilt; it is separate from the agent's LangGraph interrupt/resume flow.
 No CI workflow is committed; pytest and ruff are the intended baseline.
@@ -1080,3 +1083,167 @@ Verified: 172 pytest passed, none skipped; the agent graph binds `breakglass_req
 and nothing containing approve, launch, or decide, and `build_app` gives the agent the provider
 only with a store. Not verified: a real model calling the tool, and the ntfy push from an agent
 call. The tool runs without an approval card, since READ is allowed by policy.
+
+### Router shell with per-command classification — 2026-10-01
+
+The agent gets `ssh_router` (`ssh.router`): any shell command on the RT-AC88U
+(Asuswrt-Merlin, `192.168.0.1:8034`, user `admin`), run over SSH with a new `argus_ssh` key.
+Merlin's only SSH account is root, so nothing on the router narrows the key. A forced-command
+allowlist on the router was considered and rejected as too limiting; the agent should be able
+to act, with a classifier choosing when to ask. Each command goes to Jev (`typesafe/jev-1.13`
+through OpenRouter's `/api/alpha/decisions`, same key as the chat models), which returns
+read/mutate/destroy probabilities. P(read) ≥ 0.9 is READ and runs, P(destroy) ≥ 0.8 is
+DESTRUCTIVE and is refused, and anything else, including a classifier failure, is MUTATE and
+shows the existing approval card with the probabilities in its description. Thresholds are
+config (`classifier.read_threshold`, `classifier.destructive_threshold`). The class goes
+through the same `PolicyEngine.decide()` as static tools, so a policy override on
+`ssh.router` still wins. The agent side uses the HITL middleware's `when` predicate, so the
+interrupt format, the AG-UI adapter, and the frontend are unchanged; MCP gets the same
+per-call gate in `PolicyEngine`.
+
+The first version classified inside `when`, which had two faults. HITL is synchronous
+(`aafter_model` calls `after_model` on the event loop), so each classification blocked the
+whole server for its ~300 ms. And `interrupt()` ends the run rather than waiting, so on resume
+the HITL node runs again and calls `when` again; a different answer the second time (a failed
+call the first time, a restart emptying the cache, a probability near a threshold) changes the
+number of interrupts and the run fails on a decision-count mismatch. Now
+`CallClassificationMiddleware` classifies in `awrap_model_call`, asynchronously and in
+parallel, and stores each result in the `AIMessage`'s `response_metadata`, which is
+checkpointed and not sent back to the model. `when`, the approval description, and the
+refusal in `awrap_tool_call` read it. A missing result, including a classifier error, reads as
+MUTATE. The worker gets the same middleware, since it inherits `interrupt_on`. Two keys are kept on purpose: `argus_launcher` stays
+break-glass only, and `argus_ssh` carries direct access that may widen later.
+
+A trial of eight commands before building: plain reads came back as read 1.00, an
+`nvram set … && service restart_wan` as mutate 1.00, `mtd-erase2 nvram` and `rm -rf /jffs/*`
+as destroy ≥ 0.89. A base64-disguised `nvram erase` came back destroy 0.61 / read 0.33 and
+`find … -exec rm` destroy 0.65, both below the thresholds and so sent for approval. Calls took
+about 300 ms. The classifier is probabilistic and is the only boundary on this tool; a
+confidently wrong read would run unseen.
+
+Verified: 188 pytest passed, 15 skipped (the Postgres contract tests; no database was running,
+and this change touches none). New tests cover the classifier against a mock transport, the
+provider's ssh invocation, the MCP per-call gate, the agent binding, and the real deepagents
+graph: only the mutating call of three interrupts and the destructive one is refused; a resume
+on a rebuilt graph whose classifier now answers differently still completes; a failing
+classifier means approval; the worker's calls are classified too. Live, through the real graph
+with a scripted model, real Jev, and the real router: `nvram get productid; uptime` ran without
+approval and returned `RT-AC88U`; `service restart_wan` interrupted with Jev's probabilities
+in the description and was rejected, not run. Not verified: a real model choosing the tool,
+the approval card in the browser for it, the MCP path live, and deployment (the compose
+overlay has no `argus_ssh` secret or router known_hosts yet).
+
+The classifier is now chosen by `classifier.type` in the `ssh` provider's config, in the
+launcher's `type:` pattern (`argus/classifier/`): `jev` as above; `llm`, any OpenRouter chat
+model asked for read/mutate/destroy plus a reason through structured output, mapped straight
+to a class since it gives no calibrated probability; and `ask`, which classifies everything as
+MUTATE and is the default when no `classifier` block is set. `CachingClassifier` wraps the
+remote ones: it caches answers by command and turns any exception into an uncached MUTATE.
+Live comparison on the same commands, real services: plain reads, `service restart_wan`, and
+`rm -rf /jffs/*` got the same class from both. The base64-disguised `nvram erase` was MUTATE
+from Jev (destroy 0.51, read 0.37) and DESTRUCTIVE from `google/gemini-3.7-flash`, which
+decoded the string in its reason. Jev took 245–450 ms per command; the LLM 2.5–3.1 s, and once
+18.5 s (a timeout plus `ChatOpenAI`'s retries). Verified: 195 pytest passed, 15 skipped
+(Postgres contract tests, no database running).
+
+The tool is now `ssh.run(host, command)` (`ssh_run` for the agent and over MCP) instead of a
+router-only `ssh.router`. The `ssh` provider takes a `hosts` map like the launcher: top-level
+settings (key, known_hosts, user, port, timeout, classifier) are defaults and a host entry
+overrides any of them. Each host has a `description`, listed in the tool's description for the
+model and, with the host's name and `user@address`, sent as the context of that host's own
+classifier (Jev's `state.host`, the LLM's system prompt). Host names are an enum in the
+tool schema on both bindings; an unknown host classifies as DESTRUCTIVE and the tool refuses
+it too. Verified: 200 pytest passed, 15 skipped (Postgres); live, `ssh_run(host="router",
+command="nvram get productid; uptime")` returned `RT-AC88U`, and the MCP binding lists
+`ssh_run` with `host` limited to `router`.
+
+### Tool-call cards and resuming interrupted runs — 2026-10-01
+
+The chat's tool calls render through argus's own wildcard renderer (`frontend/src/ToolCall.tsx`)
+instead of CopilotKit's: the header shows a one-line argument summary (`router $ uptime`), a
+risk badge, and the status. `CallClassificationMiddleware` prefixes a classified call's result
+with `[risk: <class> · <note>]`, so the model sees how its command was judged, the line is kept
+in history with the result, and the card turns it into the badge.
+
+A run cut off by a server restart (`uvicorn --reload` while editing) left a card at `pending`
+for good: the checkpoint held the tool call with `next = ("tools",)`, but the adapter only
+starts runs in `"start"` mode, feeding the message state back in, so the next message restarted
+at the model and deepagents patched the call as cancelled. Now the `/agent` route tracks live run
+streams, `ArgusAgent.run_state` reports a thread whose checkpoint has a `next` step and no
+pending approval as stalled (with the unanswered calls and their classes, from the stored
+classification or the tool's static class), and a run with `forwardedProps.argus_resume` streams
+with `input=None` through an override of the adapter's `get_stream_kwargs`. Every run uses
+`durability="sync"`, since LangGraph's default `"async"` can lose the last checkpoint in a
+crash. The UI resumes on its own when every pending call is READ and otherwise shows the calls
+with their badges and a Resume button; a new message still cancels them. Resume runs the cut-off
+calls again, so a call that ran but whose result was not saved runs twice; that is why anything
+but a read waits for a click.
+
+Verified: `tests/agent/test_resume.py` cancels a run through the real AG-UI adapter while its
+ssh call is in flight, then resumes it: the call runs once, the model is called once more (to
+read the result, not to repeat the request), and the thread is no longer stalled; a resume of a
+thread with nothing stalled is a run error. API and agent tests: 99 passed. A Playwright test
+covers the card's summary, badge, and classification. Not verified: the resume flow in the
+browser (banner, auto-resume, cards filling in), and a real restart of the dev server.
+
+The stuck `wl -i eth1 status` card was not a restart after all: the server log showed
+`GraphRecursionError: Recursion limit of 25 reached`. The adapter builds each run's config with
+`ensure_config`, which sets LangChain's default `recursion_limit` of 25 explicitly, and that
+overrides the 9,999 deepagents binds on the graph, so every UI run had been capped at about
+eight model→tool rounds. The exception also escaped the event stream, leaving the cards
+pending. Now `agent.recursion_limit` (default 200, a cap on runaway loops) is the adapter's
+config, and `ArgusAgent.run` turns any run failure into `RUN_ERROR` after logging it; the
+checkpoint then reads as stalled and the UI's resume applies. Verified by a targeted test (a
+model that calls a tool after every result, limit 8: the stream ends with `RUN_ERROR`
+`GraphRecursionError` and the thread is stalled). Not verified in the browser.
+
+`ssh_run` takes an optional `timeout_seconds` (default 30, capped at the host's
+`max_timeout_seconds`, 300). The old timeout only killed the local ssh client; the command kept
+running on the host. The router's BusyBox 1.25.1 has no `timeout` applet, and a watchdog using
+job control failed there (`set -m` makes no process groups in a non-interactive ash: a
+`sleep 30 | cat` ran its full 30 s). `ssh -tt` works: closing the client hangs up the command's
+terminal, and the host kills what it started (checked live: a `sleep 41 | cat` and a
+`ping -c 100` were gone after the timeout). The terminal merges the command's stderr into
+stdout and ends lines with `\r\n`, which is normalized; `-o LogLevel=ERROR` drops the client's
+"Connection closed" notice. Output is read as it arrives, so a timed-out call returns what it
+printed. Also: the badge appeared only after a reload because the adapter's live
+`TOOL_CALL_RESULT` comes from the tool's raw output, before the middleware prefixed the
+`ToolMessage`. The middleware now passes the header through a context variable and the bound
+tool puts it at the top of its own output, so the live event and the stored message match
+(asserted in `tests/agent/test_resume.py`). Targeted tests: 63 passed in `tests/agent` and
+`tests/test_ssh_provider.py`.
+
+### Memory: conventions in AGENTS.md, one fact per file — 2026-10-01
+
+deepagents' `MemoryMiddleware` loaded workspace `AGENTS.md` under its generic prompt (Slack and
+JavaScript examples, nothing on structure), and the agent used the file as a dump: copies of its
+own tool descriptions, environment notes, and a pointer to a separate `network-monitoring.md`,
+plus an invented `tmp/agent-memory/INDEX.md` pointing at a file that did not exist.
+`agent/memory.py` now builds the middleware itself with `sources=["AGENTS.md",
+"memory/INDEX.md"]` and argus's `MEMORY_PROMPT`: `AGENTS.md` holds conventions and changes only
+when the operator says how to work; facts go one per file in `memory/<slug>.md` with
+`title`/`type`/`updated` frontmatter and how they are known, each listed in the index, which is
+loaded every conversation while the files are read on demand; procedures go to `skills/`; no
+tool-description copies, transient state, or secrets; old facts are re-checked before use.
+`seed_workspace` creates both files if missing. The dev workspace was migrated by hand into seven
+atomic files (router, LAN subnet, ISP gateway, theseus, an unknown wired host, the sleeping smart
+plug, the Docker canaries); the duplicated tool notes and the stray index were dropped.
+That was too fine-grained: the rule is now one topic per file (memory/<topic>.md, add to an
+existing topic first), and the network facts were merged into `memory/network.md`. Verified:
+`tests/agent/test_graph.py` (12 passed) seeds both files without overwriting, and a model call's
+system prompt contains the conventions, the index, and `<memory_rules>`, without deepagents'
+generic examples. Not verified: how a real model follows the rules over a long conversation.
+
+### Chat attachments — 2026-10-01
+
+The chat accepts images, PDFs, and text files (logs, configs), 10 MB each, through CopilotKit's
+`attachments` (the "+" menu, drag and drop, paste). Files travel inline as base64 message parts;
+the AG-UI adapter already converts image and document parts to LangChain `image_url` and `file`
+blocks in the OpenAI format OpenRouter accepts. Text files are turned into text parts in
+`ArgusHttpAgent.requestInit` (`Attached file <name>:` plus the contents), because providers
+handle text documents unevenly. The simple version was chosen on purpose: attachments are stored
+in checkpoints and the history table like any message content, there is no separate upload
+store, and tools cannot read them. Verified live: a generated PNG and PDF, converted by the
+adapter, sent to `google/gemini-3.7-flash` through OpenRouter, came back as "red" and the code
+printed in the PDF. A Playwright test attaches a `.log` with no MIME type and a PNG and checks
+the request: the log is inlined as text, the image stays an image part, and the run completes.

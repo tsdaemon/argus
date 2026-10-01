@@ -28,8 +28,9 @@ from langchain_openai import ChatOpenAI
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.graph.state import CompiledStateGraph
 
+from argus.agent.memory import memory_middleware, seed_workspace
 from argus.agent.model import CostReportingChatOpenAI
-from argus.agent.tools import langchain_bind
+from argus.agent.tools import classification_middleware, langchain_bind
 from argus.config import AgentConfig
 from argus.policy import PolicyEngine
 from argus.providers.base import Provider
@@ -41,13 +42,6 @@ _WORKER_DESCRIPTION = (
     "Delegate routine, repetitive, or read-heavy tool-calling work here (e.g. checking "
     "several containers' status/logs) to save cost. Keep planning, synthesis, and "
     "deciding whether an action needs approval on the main agent."
-)
-
-_DEFAULT_AGENTS_MD = (
-    "# Argus Agent memory\n\n"
-    "Nothing recorded yet. Use `edit_file` on this file to save durable notes, "
-    "preferences, and runbooks as you learn them — this file is loaded into every run's "
-    "system prompt.\n"
 )
 
 # Disables deepagents' default "general purpose subagent" (the `task` tool). Keyed to
@@ -85,19 +79,20 @@ def build_graph(
     workspace_root = Path(config.workspace_root)
     workspace_root.mkdir(parents=True, exist_ok=True)
     (workspace_root / "skills").mkdir(exist_ok=True)
-
-    agents_md = workspace_root / "AGENTS.md"
-    if not agents_md.exists():
-        agents_md.write_text(_DEFAULT_AGENTS_MD)
+    seed_workspace(workspace_root)
 
     tools: list[Any] = []
     interrupt_on: dict[str, Any] = {}
+    specs = []
     for name, provider in providers.items():
-        provider_tools, provider_interrupt_on = langchain_bind(
-            policy, provider.tool_specs(provider_settings.get(name, {}))
-        )
+        provider_specs = provider.tool_specs(provider_settings.get(name, {}))
+        provider_tools, provider_interrupt_on = langchain_bind(policy, provider_specs)
         tools.extend(provider_tools)
         interrupt_on.update(provider_interrupt_on)
+        specs.extend(provider_specs)
+    # The worker inherits `interrupt_on`, so it needs the classifications those read.
+    classifier = classification_middleware(policy, specs)
+    extra_middleware = [classifier] if classifier else []
 
     backend = FilesystemBackend(root_dir=workspace_root)
     filesystem_middleware = FilesystemMiddleware(backend=backend, tools=_WORKSPACE_TOOLS)
@@ -106,15 +101,16 @@ def build_graph(
         name="worker",
         description=_WORKER_DESCRIPTION,
         model=worker_model or _build_model(config, config.worker_model),
+        middleware=extra_middleware,
     )
 
     return create_deep_agent(
         model=model or _build_model(config, config.model),
         tools=tools,
         backend=backend,
-        middleware=[filesystem_middleware],
+        # Not `memory=`: argus's own memory rules replace deepagents' generic prompt.
+        middleware=[filesystem_middleware, memory_middleware(backend), *extra_middleware],
         skills=["skills"],
-        memory=["AGENTS.md"],
         subagents=[worker],
         interrupt_on=interrupt_on or None,
         checkpointer=checkpointer,

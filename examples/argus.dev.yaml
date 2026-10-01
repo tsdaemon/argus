@@ -23,6 +23,24 @@ providers:
           host: 192.168.0.7
           user: argus-bg
 
+  # Shell on named hosts; each command is classified (read runs, mutate asks, destroy
+  # refused). Top-level settings are defaults; a host entry overrides any of them.
+  ssh:
+    enabled: true
+    identity_file: ./.ssh/argus_ssh
+    known_hosts_file: ./.ssh/known_hosts
+    classifier:
+      type: jev  # jev | llm | ask (every command needs approval)
+      api_key: ${OPENROUTER_API_KEY}
+      # jev: model (typesafe/jev-1.13), read_threshold (0.9), destructive_threshold (0.8)
+      # llm: model (google/gemini-3.7-flash), base_url
+    hosts:
+      router:
+        host: 192.168.0.1
+        port: 8034
+        user: admin
+        description: Asuswrt-Merlin home router (RT-AC88U, BusyBox), root shell
+
 policy:
   default_mutate: require_approval
   default_destructive: deny

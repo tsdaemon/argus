@@ -1,13 +1,16 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   CopilotKitProvider, CopilotChat, CopilotChatConfigurationProvider,
-  useAgent, useInterrupt, WildcardToolCallRender,
+  useAgent, useCopilotKit, useInterrupt,
 } from "@copilotkit/react-core/v2";
-import { api, ArgusHttpAgent, deleteThread, type Thread } from "./agent";
+import {
+  api, ArgusHttpAgent, attachmentAccept, attachmentMaxSize, deleteThread, resumeProp, type RunState, type Thread,
+} from "./agent";
 import { Approvals } from "./Approvals";
+import { summarize, ToolCallCard } from "./ToolCall";
 import logo from "./logo.png";
 
-const toolRenderers = [WildcardToolCallRender];
+const toolRenderers = [ToolCallCard];
 const pageSize = 100;
 const collapsedKey = "argus.sidebar.collapsed";
 
@@ -19,30 +22,71 @@ function Chat({ thread, onBusy, onFinished }: {
   thread: Thread; onBusy: (busy: boolean) => void; onFinished: () => void;
 }) {
   const { agent } = useAgent();
+  const { copilotkit } = useCopilotKit();
   const [connecting, setConnecting] = useState(true);
+  const [stalled, setStalled] = useState<RunState | null>(null);
+  const [resuming, setResuming] = useState(false);
+  const [uploadError, setUploadError] = useState("");
   const pending = agent.pendingInterrupts.length > 0;
   useInterrupt({ render: (props) => <Approvals key={props.interrupts.map((i) => i.id).join()} {...props} /> });
   useEffect(() => {
     const subscription = agent.subscribe({
-      onRunStartedEvent: () => { onBusy(true); },
-      onRunFinalized: () => { setConnecting(false); onBusy(false); onFinished(); },
+      onRunStartedEvent: () => { onBusy(true); setStalled(null); setUploadError(""); },
+      onRunFinalized: () => { setConnecting(false); setResuming(false); onBusy(false); onFinished(); },
     });
     return () => { subscription.unsubscribe(); onBusy(false); };
   }, [agent, onBusy, onFinished]);
-  return <CopilotChat
+
+  const resume = useCallback(() => {
+    setResuming(true);
+    void copilotkit.runAgent({ agent, forwardedProps: { [resumeProp]: true } });
+  }, [agent, copilotkit]);
+
+  // Once the transcript is loaded: a run cut off partway resumes by itself when it would
+  // only read, and otherwise asks first.
+  useEffect(() => {
+    if (connecting) return;
+    let cancelled = false;
+    api<RunState>(`/api/threads/${thread.id}/run-state`).then((state) => {
+      if (cancelled || !state.stalled) return;
+      if (state.pending.every((call) => call.class === "read")) resume();
+      else setStalled(state);
+    }).catch(() => { /* the chat still works; the run stays interrupted */ });
+    return () => { cancelled = true; };
+  }, [connecting, thread.id, resume]);
+
+  return <>
+  {resuming && <div className="resume-notice" role="status">Resuming the interrupted run…</div>}
+  {stalled && !resuming && <section className="resume" aria-label="Interrupted run">
+    <div className="eyebrow">Interrupted run</div>
+    <p>The last run stopped before these calls finished. Resuming runs them again; sending a new
+      message cancels them instead.</p>
+    <ul>{stalled.pending.map((call, i) => <li key={i}>
+      <code>{call.name} {summarize(call.name, call.args)}</code>
+      <span className="tool-call-risk" data-risk={call.class}>{call.class === "mutate" ? "change" : call.class}</span>
+    </li>)}</ul>
+    <button className="primary" onClick={resume}>Resume</button>
+  </section>}
+  {uploadError && <div className="resume-notice" role="alert">{uploadError}</div>}
+  <CopilotChat
     threadId={thread.id} className="argus-chat"
+    attachments={{
+      enabled: true, accept: attachmentAccept, maxSize: attachmentMaxSize,
+      onUploadFailed: (failure) => setUploadError(`Could not attach that file: ${failure.message}`),
+    }}
     labels={{
       chatInputPlaceholder: "Ask argus about your home infrastructure…",
       welcomeMessageText: "What would you like to look into?",
       chatDisclaimerText: "Operational changes pause for your approval.",
     }}
     input={{
-      showDisclaimer: true, startTranscribeButton: () => null, addMenuButton: () => null,
+      showDisclaimer: true, startTranscribeButton: () => null,
       ...(connecting || pending ? {
         textArea: { disabled: true }, sendButton: { disabled: true },
       } : {}),
     }}
-  />;
+  />
+  </>;
 }
 
 function Conversation({ thread, onBusy, onFinished }: {

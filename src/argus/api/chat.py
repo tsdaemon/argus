@@ -20,6 +20,10 @@ from argus.db.history import HistoryRepository
 
 
 def add_chat_routes(app: FastAPI, agent: ArgusAgent, history: HistoryRepository | None) -> None:
+    # Threads with a run stream open in this process. A checkpoint that stopped partway is
+    # only stalled when its thread is not here; after a restart this set is empty.
+    running: set[str] = set()
+
     def require_history() -> HistoryRepository:
         if history is None:
             raise HTTPException(503, "Chat history requires a configured history store.")
@@ -43,6 +47,14 @@ def add_chat_routes(app: FastAPI, agent: ArgusAgent, history: HistoryRepository 
         request_agent = agent.clone()
 
         async def events():
+            running.add(input_data.thread_id)
+            try:
+                async for event in run_events():
+                    yield event
+            finally:
+                running.discard(input_data.thread_id)
+
+        async def run_events():
             async for event in request_agent.run(input_data):
                 if history is not None and event.type == EventType.MESSAGES_SNAPSHOT:
                     await history.save_chat_messages(
@@ -85,6 +97,12 @@ def add_chat_routes(app: FastAPI, agent: ArgusAgent, history: HistoryRepository 
         if not await require_history().delete_thread(thread_id):
             raise HTTPException(404, "Conversation not found.")
         await agent.delete_thread_state(str(thread_id))
+
+    @app.get("/api/threads/{thread_id}/run-state")
+    async def run_state(thread_id: UUID):
+        if str(thread_id) in running:
+            return {"stalled": False, "pending": []}
+        return await agent.run_state(str(thread_id))
 
     @app.get("/api/threads/{thread_id}/connect")
     async def connect(thread_id: UUID, request: Request, run_id: str = "replay"):

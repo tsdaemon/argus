@@ -57,6 +57,9 @@ are base dependencies in `pyproject.toml`.
 | Optional MCP sub-app assembly + bearer auth | `src/argus/mcp/server.py`, `src/argus/mcp/auth.py` |
 | Server factory `create_app` and its lifespan | `src/argus/api/app.py` |
 | Docker visibility and restart tools | `src/argus/providers/docker_provider.py` |
+| Shell over SSH on named hosts, classified per command | `src/argus/providers/ssh_provider.py` |
+| Per-call command risk classifiers (`jev`, `llm`, `ask`) and their factory | `src/argus/classifier/` |
+| Agent middleware storing per-call classifications for HITL | `src/argus/agent/classification.py` |
 | Break-glass provider; its Postgres repository | `src/argus/providers/breakglass_provider.py`, `src/argus/db/breakglass.py` |
 | Break-glass web routes + shared admin authentication | `src/argus/mcp/webapp.py`, `src/argus/webauth.py` |
 | argus's own HTML pages (login, break-glass): Jinja templates on one base | `src/argus/webpages.py`, `src/argus/templates/` |
@@ -85,6 +88,28 @@ LangChain tool names replace dots with underscores (`docker_restart_container`).
   `resume[]` responses into LangGraph decisions keyed by interrupt ID. Validate responses
   before checkpointing them; cancellation rejects the pending actions. The agent's policy
   instance needs no `ApprovalBackend` because it only calls `.decide()`.
+- **Per-call classification** is for a tool whose risk depends on its arguments: `ssh.run`
+  (agent and MCP name `ssh_run`) runs any shell command on a host named under the `ssh`
+  provider's `hosts` (the router, as its root `admin` user). Top-level settings are defaults a
+  host overrides, as in the launcher; each host has its own classifier, whose context is the
+  host's name, `user@address`, and `description`. Commands run with `ssh -tt` so that stopping the
+  client on timeout hangs up the command on the host (the router's BusyBox has no `timeout`);
+  `timeout_seconds` is an optional tool argument, defaulting to the host's `timeout_seconds`
+  (30) and capped at its `max_timeout_seconds` (300). A timed-out call returns its output so far.
+  Its `ToolSpec.classify` uses the classifier the provider's `classifier.type` names:
+  `jev` (default model `typesafe/jev-1.13` via OpenRouter's Decisions API; P(read) ≥ 0.9 is
+  READ, P(destroy) ≥ 0.8 is DESTRUCTIVE, else MUTATE), `llm` (any OpenRouter chat model with
+  structured output, answer mapped directly), or `ask` (always MUTATE; the default with no
+  `classifier` block). A failed classification is MUTATE and is not cached. The same
+  `decide()` maps that class, so a read
+  runs, a change shows the approval card, and a destructive command is refused. On the
+  agent side, `CallClassificationMiddleware` (`agent/classification.py`, on the planner
+  and the worker) classifies asynchronously when the model returns and stores the result
+  in the `AIMessage`'s `response_metadata`. The HITL `when` predicate and description
+  only read it: HITL is synchronous and re-runs its node on resume, so it must do no I/O
+  and see the same answer on both passes. A missing result reads as MUTATE. MCP awaits
+  the classifier in `PolicyEngine._classified_gate`. The classifier is the only thing
+  narrowing this tool.
 - **MCP approval** awaits real `ctx.elicit()` inside the policy gate before calling the
   implementation. It is not an advisory tool the model can skip. `ElicitApproval` refuses
   declined/cancelled requests and catches `ToolError` to fail closed.
@@ -117,8 +142,12 @@ the app without an admin repository get an open app on purpose.
 - **Use deepagents for workspace, skills, memory, and summarization.** `create_deep_agent()`
   returns a normal LangGraph `CompiledStateGraph`; checkpointing/resumption stays visible.
   Filesystem tools are `ls`, `read_file`, `write_file`, `edit_file`, `delete`, `glob`, and
-  `grep`; arbitrary shell `execute` is excluded. Skills live under `skills/`; workspace
-  `AGENTS.md` is loaded as memory and created if absent. This repository's handover file
+  `grep`; arbitrary shell `execute` is excluded. Skills live under `skills/`. Memory
+  (`agent/memory.py`) splits conventions from facts: workspace `AGENTS.md` is the operator's
+  day-0 rulebook, and learned facts go one topic per file under `memory/<topic>.md`, each listed in
+  `memory/INDEX.md`. Both `AGENTS.md` and the index load into every conversation (once per
+  thread); argus's own `MEMORY_PROMPT` replaces deepagents' generic memory prompt, and both
+  files are created if absent, never overwritten. This repository's handover file
   is distinct from that runtime workspace memory. Search is grep/progressive disclosure;
   no vector index or Mem0 integration exists.
 - **State, history, and memory are separate.** LangGraph manages its checkpoint tables and
@@ -134,6 +163,25 @@ the app without an admin repository get an open app on purpose.
   Direct agent registration currently uses `agents__unsafe_dev_only`; keep dependencies
   pinned and exercise browser tests when upgrading. The conversation list is backed by
   Argus Postgres, without a CopilotKit Enterprise thread store or a Node runtime server.
+- **Interrupted runs resume from the checkpoint.** Every run streams with
+  `durability="sync"`. A thread whose checkpoint has a `next` step, no pending approval, and no
+  live run stream in this process (`running` in `api/chat.py`) has stalled, e.g. on a restart;
+  `GET /api/threads/{id}/run-state` reports it with the unanswered calls and their classes.
+  A run with `forwardedProps.argus_resume` and no messages continues it: `ArgusAgent`
+  overrides `get_stream_kwargs` to pass `input=None`, since the adapter's `"start"` mode would
+  otherwise feed the message state back in and restart at the model. The UI resumes on its own
+  when every pending call is READ and asks otherwise, since a cut-off call may already have run.
+- **Runs get an explicit step limit.** The AG-UI adapter builds each run's config with
+  `ensure_config`, which fills in LangChain's default `recursion_limit` of 25 and overrides the
+  9,999 deepagents sets on the graph. `build_agent` passes `agent.recursion_limit` (default 200)
+  as the adapter's config. A run that fails, this limit included, ends with a `RUN_ERROR` event
+  from `ArgusAgent.run` rather than a dropped stream, and its checkpoint reads as stalled.
+- **Chat attachments are inline.** CopilotKit's `attachments` (images, PDFs, text files, 10 MB
+  each) send base64 parts in the user message; the adapter turns them into LangChain
+  `image_url`/`file` blocks that OpenRouter accepts. `ArgusHttpAgent.requestInit` inlines text
+  files as text parts, since providers handle text documents unevenly. Attachments are stored
+  in checkpoints and history like any message content; there is no separate file store, and
+  tools cannot read attachments.
 - **HTTP route order and lifespan matter.** Add AG-UI routes before mounting MCP at `/`,
   and pass the MCP sub-app's lifespan to the parent FastAPI app. Otherwise the root mount
   can swallow requests, or MCP's internal task group never starts and requests fail.
@@ -195,7 +243,11 @@ the app without an admin repository get an open app on purpose.
   the fake and `SqlHistory`; the Postgres half builds a throwaway schema with `alembic upgrade head`
   and skips if `ARGUS_TEST_DATABASE_URL` is unreachable. Report skips explicitly: a green run with
   skips has not exercised the SQL implementation.
-- `OPENROUTER_API_KEY` populates `agent.api_key` through YAML expansion.
+- `OPENROUTER_API_KEY` populates `agent.api_key` and the `ssh` provider's classifier key
+  through YAML expansion.
+- SSH keys live in the gitignored `.ssh/`: `argus_launcher` is break-glass only, `argus_ssh`
+  is direct access (the router), kept apart so widening direct access never widens
+  break-glass. The router's host key is pinned in `.ssh/known_hosts`.
 - `ARGUS_AGENT_DATABASE_URL` supplies the example config and Alembic connection URL;
   `POSTGRES_PASSWORD` configures Compose's Postgres. The Taskfile's top-level `env`
   supplies the local database URL to every task, including mprocs's child processes.

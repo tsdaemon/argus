@@ -15,7 +15,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
-from argus.policy import PolicyEngine, ToolClass
+from argus.policy import Classifier, PolicyEngine, ToolClass
 
 
 @dataclass(frozen=True)
@@ -29,6 +29,9 @@ class ToolSpec:
     # Forwarded to `mcp.tool(**kwargs)` when bound onto the MCP server — most tools need
     # none of this; it exists for the rare case a tool needs e.g. an explicit `name=`.
     mcp_kwargs: dict[str, Any] = field(default_factory=dict)
+    # Classifies each call from its arguments, for a tool whose risk depends on them (a
+    # shell command). `tool_class` then only decides whether the tool is bound at all.
+    classify: Classifier | None = None
 
 
 def mcp_bind(mcp: Any, policy: PolicyEngine, specs: list[ToolSpec]) -> None:
@@ -39,6 +42,7 @@ def mcp_bind(mcp: Any, policy: PolicyEngine, specs: list[ToolSpec]) -> None:
             tool_id=spec.tool_id,
             tool_class=spec.tool_class,
             summary=spec.summary,
+            classify=spec.classify,
             **spec.mcp_kwargs,
         )(spec.fn)
 
