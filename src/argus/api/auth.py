@@ -16,6 +16,7 @@ from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from starlette.types import ASGIApp, Receive, Scope, Send
 
+from argus.db.tokens import TokenAuth
 from argus.webauth import (
     SESSION_COOKIE,
     SESSION_MAX_AGE_SECONDS,
@@ -40,9 +41,10 @@ def safe_next(target: str | None) -> str:
 
 
 class RequireLogin:
-    def __init__(self, app: ASGIApp, admin: AdminAuth) -> None:
+    def __init__(self, app: ASGIApp, admin: AdminAuth, tokens: TokenAuth | None = None) -> None:
         self._app = app
         self._admin = admin
+        self._tokens = tokens
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http" or _is_open(scope["path"]):
@@ -50,6 +52,21 @@ class RequireLogin:
             return
 
         request = Request(scope)
+        if scope["path"] == "/.well-known/agent-card.json" and self._tokens is not None:
+            await self._app(scope, receive, send)
+            return
+        if scope["path"] == "/a2a" or scope["path"].startswith("/a2a/"):
+            scheme, _, credential = request.headers.get("authorization", "").partition(" ")
+            token = (await self._tokens.verify(credential)
+                     if self._tokens is not None and scheme.lower() == "bearer" else None)
+            if token is None:
+                response = JSONResponse({"detail": "Valid A2A bearer token required"}, 401,
+                                        headers={"WWW-Authenticate": "Bearer"})
+                await response(scope, receive, send)
+                return
+            scope.setdefault("state", {})["api_token"] = token
+            await self._app(scope, receive, send)
+            return
         cookie = request.cookies.get(SESSION_COOKIE)
         account = await self._admin.get() if cookie else None
         if account is not None and verify_session(account.session_secret, cookie):
@@ -66,7 +83,8 @@ class RequireLogin:
         await response(scope, receive, send)
 
 
-def add_auth(app: FastAPI, admin: AdminAuth, *, initial_password: str | None = None) -> None:
+def add_auth(app: FastAPI, admin: AdminAuth, *, initial_password: str | None = None,
+             tokens: TokenAuth | None = None) -> None:
     """Add the login routes and the gate. Call before mounting anything at `/`."""
 
     @app.get("/login", include_in_schema=False)
@@ -109,4 +127,4 @@ def add_auth(app: FastAPI, admin: AdminAuth, *, initial_password: str | None = N
         response.delete_cookie(SESSION_COOKIE)
         return response
 
-    app.add_middleware(RequireLogin, admin=admin)
+    app.add_middleware(RequireLogin, admin=admin, tokens=tokens)

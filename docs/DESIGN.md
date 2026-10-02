@@ -267,8 +267,10 @@ One process, the `create_app` factory (`src/argus/api/app.py`), run by uvicorn:
 - `/mcp` — optional interface, mounted when `ARGUS_MCP_TOKEN` is set, guarded by that bearer
   token. Its sub-app adds `/breakglass` and `/launch` when the breakglass provider is
   configured. The agent UI links to this existing `/launch` page when a launcher is available.
-- **Access control** — one admin login (`argus.api.auth`) gates everything except `/mcp`,
-  `/login`, and `/agent/health`; the break-glass pages check the session again themselves.
+- `/a2a` — optional peer-agent JSON-RPC interface with issued bearer tokens.
+- `/settings/tokens` — session-authenticated token creation and revocation, with CSRF protection.
+- **Access control** — one admin login (`argus.api.auth`) gates browser interfaces; `/a2a` uses issued bearer tokens, `/mcp` uses its own token,
+  and `/login`, `/agent/health`, and the enabled public Agent Card stay open; the break-glass pages check the session again themselves.
 
 Non-obvious ordering constraint (locked in by
 `tests/api/test_app.py`): the AG-UI routes must be added to the FastAPI app
@@ -305,8 +307,22 @@ Three real interfaces, all committed for v0, each with a distinct caller:
   leftover kept only for compatibility.
 - **A2A (Agent2Agent)** — the interface for *other agents* to call into Argus Agent
   itself as a callable peer (not its tools — the whole agent), distinct from MCP
-  (Argus's own tools, outbound-shaped) and from AG-UI (human-facing). Not yet designed
-  — see the ledger.
+  (Argus's own tools, outbound-shaped) and from AG-UI (human-facing). Implemented as
+  an opt-in JSON-RPC `/a2a` endpoint using the official A2A Python SDK, pinned to 1.0.
+  A minimal public `/.well-known/agent-card.json` declares bearer authentication.
+  Admins issue named, revocable tokens through `/settings/tokens`; only secret hashes
+  persist. A2A tokens are separate from browser sessions and the static MCP token.
+  Argus-owned `api_tokens`, `a2a_contexts`, and `a2a_tasks` tables persist ownership,
+  task snapshots, and the mapping to checkpoint/history threads. Every task operation,
+  including access to the SDK active-task registry, checks token ownership.
+  A separately assembled unattended graph uses the same providers, workspace, and policy.
+  Middleware on planner and worker refuses REQUIRE_APPROVAL/DENY calls without HITL;
+  configured ALLOW overrides remain effective. Tokens cannot answer approvals or launch.
+  Tokens grant access to shared agent knowledge, so callers must be trusted with it.
+  One task runs per context; concurrent work is rejected. Restart marks unfinished tasks
+  failed. A subsequent message closes unanswered calls and starts a new turn without
+  replaying unknown effects. Text inputs, task operations, and SSE status/final-answer
+  streaming are supported; files, model-token streaming, and push callbacks are excluded.
 
 ## Observability
 

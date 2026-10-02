@@ -265,6 +265,7 @@ export default function App() {
         <span className="status-dot" data-busy={busy || undefined} />
         <span className="label" role="status">{busy ? "Working…" : "Ready"}</span>
         {launch && <a className="label" href="/launch" target="_blank" rel="noreferrer">Open privileged session ↗</a>}
+        {authEnabled && <a className="label" href="/settings/tokens">API tokens</a>}
         {authEnabled && <form method="post" action="/logout"><button className="link" type="submit">Log out</button></form>}
       </div>
     </aside>

@@ -6,9 +6,17 @@ import secrets
 import uuid
 from dataclasses import replace
 from datetime import UTC, datetime
+from uuid import UUID
 
+from a2a.server.tasks import TaskStore
+from a2a.types.a2a_pb2 import Task
+from a2a.utils.errors import InvalidParamsError
+from google.protobuf.json_format import MessageToDict, ParseDict
+
+from argus.db.a2a import interrupted, owner, task_page
 from argus.db.admin import AdminAccount
 from argus.db.breakglass import PENDING, BreakGlassRequest
+from argus.db.tokens import ApiToken, now
 
 
 class InMemoryHistory:
@@ -118,3 +126,72 @@ class InMemoryAdmin:
             return False
         self._admin = account
         return True
+
+
+
+# Repository fake used by API tests and the shared repository contract suite.
+class InMemoryTokens:
+    def __init__(self):
+        self.tokens: dict[UUID, ApiToken] = {}
+
+    async def create(self, token: ApiToken) -> None:
+        self.tokens[token.id] = token
+
+    async def get(self, token_id: UUID) -> ApiToken | None:
+        return self.tokens.get(token_id)
+
+    async def list(self) -> list[ApiToken]:
+        return sorted(self.tokens.values(), key=lambda t: t.created_at, reverse=True)
+
+    async def revoke(self, token_id: UUID) -> bool:
+        if token_id not in self.tokens:
+            return False
+        self.tokens[token_id] = replace(self.tokens[token_id], revoked_at=now())
+        return True
+
+    async def used(self, token_id: UUID) -> None:
+        self.tokens[token_id] = replace(self.tokens[token_id], last_used_at=now())
+
+
+
+class InMemoryA2A(TaskStore):
+    def __init__(self):
+        self.contexts = {}
+        self.tasks = {}
+
+    async def create_context(self, context_id, owner, thread_id):
+        if context_id in self.contexts:
+            raise ValueError("Context exists.")
+        self.contexts[context_id] = (owner, thread_id)
+
+    async def thread(self, context_id, owner):
+        entry = self.contexts.get(context_id)
+        return entry[1] if entry and entry[0] == owner else None
+
+    async def save(self, task, context):
+        if await self.thread(task.context_id, owner(context)) is None:
+            raise InvalidParamsError(message="Unknown context.")
+        existing = self.tasks.get(task.id)
+        if existing and existing["contextId"] != task.context_id:
+            return
+        self.tasks[task.id] = MessageToDict(task)
+
+    async def get(self, task_id, context):
+        data = self.tasks.get(task_id)
+        if data is None or await self.thread(data["contextId"], owner(context)) is None:
+            return None
+        return ParseDict(data, Task())
+
+    async def list(self, params, context):
+        tasks = [await self.get(task_id, context) for task_id in self.tasks]
+        return task_page([task for task in tasks if task is not None], params)
+
+    async def delete(self, task_id, context):
+        if await self.get(task_id, context) is not None:
+            self.tasks.pop(task_id)
+
+    async def recover(self):
+        for task_id, payload in self.tasks.items():
+            task = ParseDict(payload, Task())
+            if interrupted(task):
+                self.tasks[task_id] = MessageToDict(task)

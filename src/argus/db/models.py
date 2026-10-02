@@ -160,3 +160,34 @@ class AdminAccountRow(Base):
     username: Mapped[str] = mapped_column(Text)
     password_hash: Mapped[str] = mapped_column(Text)
     session_secret: Mapped[str] = mapped_column(Text)
+
+
+class ApiTokenRow(Base):
+    __tablename__ = "api_tokens"
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    name: Mapped[str] = mapped_column(Text)
+    secret_hash: Mapped[str] = mapped_column(Text)
+    interface: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True))
+    expires_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    revoked_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    last_used_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+
+
+class A2AContextRow(Base):
+    __tablename__ = "a2a_contexts"
+
+    id: Mapped[str] = mapped_column(Text, primary_key=True)
+    token_id: Mapped[uuid.UUID] = _cascade_fk("api_tokens.id")
+    thread_id: Mapped[uuid.UUID] = _cascade_fk("threads.id")
+
+
+class A2ATaskRow(Base):
+    __tablename__ = "a2a_tasks"
+
+    id: Mapped[str] = mapped_column(Text, primary_key=True)
+    context_id: Mapped[str] = mapped_column(
+        Text, ForeignKey("a2a_contexts.id", ondelete="CASCADE")
+    )
+    payload: Mapped[dict] = mapped_column(JSONB)

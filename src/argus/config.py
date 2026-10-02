@@ -70,10 +70,18 @@ class AgentConfig(BaseModel):
     otel: OtelConfig = OtelConfig()
 
 
+class A2AConfig(BaseModel):
+    """Opt-in peer-agent interface. URL is the externally reachable JSON-RPC endpoint."""
+
+    enabled: bool = False
+    url: str = "http://localhost:8421/a2a"
+
+
 class ArgusConfig(BaseModel):
     providers: dict[str, ProviderEntry] = {}
     policy: PolicyConfig = PolicyConfig()
     agent: AgentConfig = AgentConfig()
+    a2a: A2AConfig = A2AConfig()
 
 
 def load_config(path: str | Path) -> ArgusConfig:

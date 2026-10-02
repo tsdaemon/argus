@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+{% block title %}API tokens · argus{% endblock %}
+{% block content %}
+<main>
+  <div class="top-bar">
+    <h1>API tokens</h1>
+    <a href="/">Back to chat</a>
+  </div>
+  <p>Let a trusted agent call Argus over A2A. Tokens give access to shared workspace
+    and memory; actions requiring approval are refused.</p>
+  {% if secret %}
+  <div class="password-reveal" role="status">
+    <strong>Copy your token now.</strong> It will only be shown once.
+    <code>{{ secret }}</code>
+  </div>
+  {% endif %}
+  <form class="card" method="post" action="/settings/tokens">
+    {% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <div class="field-group">
+      <label class="label" for="token-name">Name</label>
+      <input id="token-name" type="text" name="name" required maxlength="100"
+             placeholder="hermes" autocomplete="off">
+    </div>
+    <div class="field-group">
+      <label class="label" for="token-expiry">Expiry (optional)</label>
+      <input id="token-expiry" type="text" name="expires_at" placeholder="2027-01-01T00:00:00Z"
+             autocomplete="off" aria-describedby="expiry-help">
+      <small id="expiry-help">Leave blank for no expiry. Use a date and time with a timezone.</small>
+    </div>
+    <div class="actions">
+      <button class="primary" type="submit">Create token</button>
+    </div>
+  </form>
+  <h1>Issued tokens</h1>
+  {% for token in tokens %}
+  <section class="card">
+    <div class="field">
+      <div class="label">Name</div>
+      <strong>{{ token.name }}</strong>
+    </div>
+    <div class="field">
+      <div class="label">Created · {{ token.interface }}</div>
+      {{ token.created_at.isoformat() }}
+    </div>
+    {% if token.expires_at %}
+    <div class="field">
+      <div class="label">Expires</div>
+      {{ token.expires_at.isoformat() }}
+    </div>
+    {% endif %}
+    <div class="field">
+      <div class="label">Last used</div>
+      {{ token.last_used_at.isoformat() if token.last_used_at else "Never" }}
+    </div>
+    {% if token.revoked_at %}
+    <div class="field">
+      <div class="label">Revoked</div>
+      {{ token.revoked_at.isoformat() }}
+    </div>
+    {% else %}
+    <div class="actions">
+      <form method="post" action="/settings/tokens/{{ token.id }}/revoke">
+        <input type="hidden" name="csrf" value="{{ csrf }}">
+        <button class="deny" type="submit">Revoke {{ token.name }}</button>
+      </form>
+    </div>
+    {% endif %}
+  </section>
+  {% else %}<p>No tokens yet.</p>{% endfor %}
+</main>
+{% endblock %}

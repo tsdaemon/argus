@@ -41,8 +41,9 @@ Legend: `[x]` done and verified · `[~]` done but unverified/partial · `[ ]` no
       NOPASSWD sudo — `argus.launcher` and `/launch` exist, but real SSH/Claude Remote
       Control remain unverified. The frontend links to the existing authenticated
       `/launch` route when the break-glass web interface is enabled.
-- `[ ]` A2A interface lets another agent call into Argus Agent — not started, but in v0
-      scope (see design doc's Interfaces section).
+- `[~]` A2A interface lets another agent call into Argus Agent — implemented with issued
+      bearer tokens, owned persistent contexts/tasks, and unattended execution. Fake-model
+      HTTP/graph tests pass; real caller/model and the new SQL repositories remain unverified.
 
 ## Explicitly out of scope for v0
 
@@ -92,8 +93,8 @@ Agreed 2026-09-20. Each item gets its own design pass before it is built.
 5. **Generative UI (A2UI)**: dashboards from provider data, so after item 2. A fixed
    catalog of read-only components the agent fills with data, so a rendered component can
    never be a way around approval.
-6. **A2A interface**: a small endpoint on the same app with bearer auth like `/mcp`, calling the
-   agent in unattended mode.
+6. **A2A interface**: implemented 2026-10-02; opt-in `/a2a`, named bearer tokens issued
+   through the admin login, and unattended graph execution. See History for verification.
 
 ## Not started
 
@@ -101,11 +102,9 @@ Agreed 2026-09-20. Each item gets its own design pass before it is built.
   archival are wired into live runs. Separate `runs`/`tool_calls`/`approvals` audit
   records still need a LangChain middleware or callback hooked into the graph.
 - `[x]` **OTel/Phoenix wiring** (`agent/tracing.py`). Non-fatal to a run; see the tracing entry in the ledger.
-- `[ ]` A2A interface — **in v0 scope** (see design doc's new Interfaces section), not
-  yet designed. Worth checking LangChain's own
-  [Agent Protocol](https://github.com/langchain-ai/agent-protocol) (`runs`/`threads`/
-  `store` REST contract, which LangGraph Platform implements a superset of) as a
-  candidate foundation rather than inventing something bespoke.
+- `[~]` A2A live interoperability and SQL verification: the interface is built using the
+  official A2A SDK 1.0.0, with fake-model transport/graph coverage. Verify with the actual
+  external caller and real model; new SQL repository contracts skipped without Postgres.
 - `[ ]` **Installing external skills** (`AgentConfig.skill_sources`, `owner/repo`
   shorthand) — design decided (see design doc's Workspace & skills section), not yet
   implemented.
@@ -1385,3 +1384,47 @@ run); serving attachments by URL would remove it.
   Monitoring; the `phoenix` database holds the 45-day Default policy (checked locally); and the
   deployed config expands `THESEUS_IP` and runs `prometheus.query`. Not checked: the browser login
   page itself, and the Prometheus tools through the agent with a real model.
+
+
+### 2026-10-02 — A2A delegation and issued API tokens
+
+Added opt-in `a2a.enabled`/`a2a.url` configuration and the official `a2a-sdk[http-server]`
+1.0.0 dependency. `/a2a` exposes A2A 1.0 JSON-RPC SendMessage/SendStreamingMessage,
+GetTask/ListTasks, SubscribeToTask, and CancelTask; discovery uses the minimal public
+`/.well-known/agent-card.json`. Text inputs only; streaming carries status updates and
+final answer artifacts, not model tokens. Push callbacks are not enabled.
+
+The admin's `/settings/tokens` page creates named credentials, reveals each secret once,
+and lists expiry, last use, and revocation. Secrets are 256-bit random values and only
+SHA-256 hashes persist. Creation/revocation use session-bound CSRF forms; A2A bearer
+credentials grant no admin, approval, launcher, or MCP access. Revocation prevents future
+requests and does not cancel previously accepted work. The React sidebar links to the page.
+
+Alembic revision `a31d9e8f6200` adds Argus-owned `api_tokens`, `a2a_contexts`, and
+`a2a_tasks`. Contexts map to separately generated checkpoint/history threads and belong
+to the issuing token. Store queries filter by owner, and cancellation/subscription check
+ownership before reaching the SDK's process-local active-task cache. A2A transcripts use
+the same archive helper as AG-UI, preserving summarized history. Shared workspace/memory
+remain accessible to the agent; these tokens are for trusted peer agents.
+
+Unattended mode assembles the same graph/providers/policy with middleware on both planner
+and fixed worker. REQUIRE_APPROVAL and DENY calls return refusals before execution;
+classification is still performed/stored once, and explicit ALLOW overrides remain effective.
+HITL is disabled only for this graph. Concurrent tasks in the same context are rejected.
+On restart, persisted unfinished tasks become failed without automatic replay. A new turn
+closes unanswered tool calls and carries a warning about unknown effects into the model.
+
+Verification: full backend suite **250 passed, 18 skipped**; skips are unavailable real
+Postgres checks, so the new SQL repositories/migration have not been exercised live.
+After adding the active cancellation/concurrency check, focused A2A + repository suite
+**9 passed, 3 skipped** (the three new SQL contracts). Ruff and `git diff --check` passed;
+frontend TypeScript/Vite build and **10 Playwright tests** passed. All model/provider checks use deterministic fakes;
+real Hermes/OpenRouter A2A interoperability and deployment remain unverified.
+
+
+### 2026-10-02 — Token page uses the shared form styles
+
+Corrected the token template to use the existing card, field-group, label, actions,
+primary/deny buttons, and password-reveal classes. Explicit text input types select
+the shared input styling; removed inline secret styling. No new design system or CSS.
+Verified the rendered page in Chromium; the 375px mobile viewport has no horizontal overflow.

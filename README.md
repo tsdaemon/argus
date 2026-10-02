@@ -14,7 +14,7 @@
 
 A self-hosted [LangGraph](https://langchain-ai.github.io/langgraph/) agent for operating home
 infrastructure through constrained tools. One agent process serves the chat UI, conversation
-history, and an optional policy-gated MCP interface for external clients.
+history, an optional policy-gated MCP interface, and optional A2A delegation for external agents.
 
 The name follows a small mythological vocabulary from the design behind this project:
 **Theseus** is the underlying system being operated on (in the reference deployment: a home
@@ -226,6 +226,48 @@ short:
 
 `${ENV_VAR}` in any config value is expanded from the environment at load time, so tokens and
 API keys never need to be committed.
+
+## A2A and API tokens
+
+Enable A2A in the deployment config and set the URL clients can reach:
+
+```yaml
+a2a:
+  enabled: true
+  url: https://argus.example.com/a2a
+```
+
+Run `task backend:migrate` locally before restarting the server (the deployment container
+migrates on startup). Log in and open **API tokens** in the sidebar, or visit
+`/settings/tokens`. Create a named token, optionally with an expiry, and copy its secret
+once into the calling agent's secret configuration. Argus stores only its hash; the same
+page lists usage and revokes tokens. Revocation blocks subsequent requests, without
+cancelling work already accepted.
+
+Discovery is `GET /.well-known/agent-card.json`; execution is JSON-RPC at `POST /a2a`, using
+A2A 1.0 and the official Python SDK. Every RPC needs `Authorization: Bearer <token>` and
+`A2A-Version: 1.0`. For example, from a client with `ARGUS_API_TOKEN` configured:
+
+```bash
+curl https://argus.example.com/a2a \
+  -H "Authorization: Bearer $ARGUS_API_TOKEN" \
+  -H 'A2A-Version: 1.0' -H 'Content-Type: application/json' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"SendMessage","params":{"message":{"messageId":"check-1","role":"ROLE_USER","parts":[{"text":"Check service health and report findings."}]}}}'
+```
+
+Supports text messages, task lookup/listing, SSE streaming/subscription, and cancellation.
+Use the returned `contextId` on a new message to continue a conversation; terminal task IDs
+cannot be reused. Contexts and tasks belong to the issuing token and cannot access browser
+conversations. Tasks and transcripts persist in Postgres. On restart, unfinished tasks become
+failed; a new message closes unanswered calls and starts a new turn without replaying them.
+One task executes per context at a time. Streaming reports task status and the final answer;
+it does not stream model tokens. Push callbacks and file inputs are not supported.
+
+A2A uses unattended execution for both planner and worker. Calls requiring human approval
+are refused; explicit policy ALLOW overrides still apply. A client cannot approve operations
+or launch break-glass. These tokens grant access to the agent's **shared private workspace
+and memory**, so issue them only to trusted agents. They do not grant the admin session or
+MCP access; `ARGUS_MCP_TOKEN` remains separate.
 
 ## Providers shipped in v1
 

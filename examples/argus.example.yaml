@@ -81,3 +81,9 @@ policy:
   # Example: allow container restarts without a prompt for one low-stakes service,
   # while everything else stays gated behind approval:
   #   docker.restart_container: require_approval
+
+# Optional peer-agent interface. Tokens are issued through /settings/tokens after login.
+# Use the externally reachable endpoint URL in the Agent Card.
+a2a:
+  enabled: false
+  url: http://localhost:8421/a2a

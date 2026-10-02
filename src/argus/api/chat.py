@@ -16,6 +16,7 @@ from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 
 from argus.agent.api import ArgusAgent
+from argus.agent.history import archive_messages
 from argus.db.history import HistoryRepository
 
 
@@ -57,20 +58,10 @@ def add_chat_routes(app: FastAPI, agent: ArgusAgent, history: HistoryRepository 
         async def run_events():
             async for event in request_agent.run(input_data):
                 if history is not None and event.type == EventType.MESSAGES_SNAPSHOT:
-                    await history.save_chat_messages(
-                        thread_id,
-                        [
-                            m.model_dump(mode="json", by_alias=True, exclude_none=True)
-                            for m in event.messages
-                        ],
-                    )
-                    # Keep the visible transcript intact during subsequent runs,
-                    # too, when the graph's working context has been summarized.
+                    archived = await archive_messages(history, thread_id, event.messages)
+                    # Preserve the transcript through working-context summarization.
                     event = MessagesSnapshotEvent.model_validate(
-                        {
-                            **event.model_dump(),
-                            "messages": await history.chat_messages(thread_id),
-                        }
+                        {**event.model_dump(), "messages": archived}
                     )
                 yield encoder.encode(event)
 

@@ -30,7 +30,8 @@ from langgraph.graph.state import CompiledStateGraph
 
 from argus.agent.memory import memory_middleware, seed_workspace
 from argus.agent.model import CostReportingChatOpenAI
-from argus.agent.tools import classification_middleware, langchain_bind
+from argus.agent.tools import classification_middleware, external_name, langchain_bind
+from argus.agent.unattended import UnattendedMiddleware
 from argus.config import AgentConfig
 from argus.policy import PolicyEngine
 from argus.providers.base import Provider
@@ -73,6 +74,7 @@ def build_graph(
     checkpointer: BaseCheckpointSaver | None = None,
     model: Any = None,
     worker_model: Any = None,
+    unattended: bool = False,
 ) -> CompiledStateGraph:
     """Assemble the Argus Agent graph.
 
@@ -98,6 +100,11 @@ def build_graph(
     # The worker inherits `interrupt_on`, so it needs the classifications those read.
     classifier = classification_middleware(policy, specs)
     extra_middleware = [classifier] if classifier else []
+    if unattended:
+        extra_middleware.append(
+            UnattendedMiddleware(policy, {external_name(s.tool_id): s for s in specs})
+        )
+        interrupt_on = {}
 
     backend = FilesystemBackend(root_dir=workspace_root)
     filesystem_middleware = FilesystemMiddleware(backend=backend, tools=_WORKSPACE_TOOLS)
@@ -112,6 +119,11 @@ def build_graph(
     return create_deep_agent(
         model=model or _build_model(config, config.model),
         tools=tools,
+        system_prompt=(
+            "This run is unattended. Operational calls requiring human approval are refused. "
+            "Report findings and explain any actions that need approval. You may file a "
+            "break-glass request when escalation is appropriate; you cannot approve it."
+        ) if unattended else None,
         backend=backend,
         # Not `memory=`: argus's own memory rules replace deepagents' generic prompt.
         middleware=[filesystem_middleware, memory_middleware(backend), *extra_middleware],

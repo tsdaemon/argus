@@ -17,15 +17,20 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from langgraph.checkpoint.base import BaseCheckpointSaver
 
+from argus.a2a.server import add_a2a_routes
 from argus.agent.api import build_agent
+from argus.agent.graph import build_graph
 from argus.agent.tracing import setup_tracing
 from argus.api.auth import add_auth
 from argus.api.chat import add_chat_routes
+from argus.api.tokens import add_token_routes
 from argus.config import ArgusConfig, load_config
+from argus.db.a2a import A2ARepository, SqlA2A
 from argus.db.admin import AdminRepository, SqlAdmin
 from argus.db.breakglass import BreakGlassRepository, SqlBreakGlass
 from argus.db.checkpointer import make_checkpointer
 from argus.db.history import HistoryRepository, SqlHistory, make_engine
+from argus.db.tokens import SqlTokens, TokenAuth, TokenRepository
 from argus.mcp.auth import StaticTokenVerifier
 from argus.mcp.server import build_http_app, build_server
 from argus.mcp.webapp import add_breakglass_routes
@@ -43,12 +48,18 @@ def build_app(
     admin: AdminRepository | None = None,
     *,
     frontend_dir: Path | None = None,
+    tokens: TokenRepository | None = None,
+    a2a: A2ARepository | None = None,
     resources: Callable[[], AbstractAsyncContextManager[None]] | None = None,
 ) -> FastAPI:
     # FastMCP's app needs its own lifespan forwarded into the parent FastAPI
     # constructor (an internal task group otherwise never starts), so it must exist
     # before `FastAPI(...)` is built, even though it's mounted at the end (see above).
     admin_auth = AdminAuth(admin) if admin is not None else None
+    token_auth = TokenAuth(tokens) if tokens is not None and admin_auth is not None else None
+    if config.a2a.enabled and (token_auth is None or a2a is None or history is None):
+        raise ValueError("A2A requires admin, token, task, and history repositories.")
+    a2a_executor = None
     mcp_app = None
     mcp_token = os.environ.get("ARGUS_MCP_TOKEN")
     if mcp_token:
@@ -66,11 +77,20 @@ def build_app(
                 await stack.enter_async_context(resources())
             if mcp_app is not None:
                 await stack.enter_async_context(mcp_app.lifespan(app))
-            yield
+            if config.a2a.enabled:
+                await a2a.recover()
+            try:
+                yield
+            finally:
+                if a2a_executor is not None:
+                    await a2a_executor.close()
 
     app = FastAPI(lifespan=lifespan)
     if admin_auth is not None:  # without an admin store (tests) the app stays open
-        add_auth(app, admin_auth, initial_password=os.environ.get("ARGUS_ADMIN_PASSWORD"))
+        add_auth(app, admin_auth, initial_password=os.environ.get("ARGUS_ADMIN_PASSWORD"),
+                 tokens=token_auth)
+        if token_auth is not None:
+            add_token_routes(app, admin_auth, token_auth)
 
     policy = PolicyEngine(
         None,
@@ -96,6 +116,13 @@ def build_app(
         checkpointer=checkpointer,
     )
     add_chat_routes(app, agui_agent, history)
+    if config.a2a.enabled:
+        unattended_graph = build_graph(
+            config=config.agent, providers=providers, provider_settings=provider_settings,
+            policy=policy, checkpointer=checkpointer, unattended=True,
+        )
+        a2a_executor = add_a2a_routes(app, unattended_graph, a2a, history, config.a2a,
+                                     config.agent.recursion_limit)
 
     # The break-glass pages are for the human, so they come with break-glass, not with /mcp.
     breakglass_provider = providers.get("breakglass")
@@ -168,4 +195,6 @@ def create_app() -> FastAPI:
         SqlBreakGlass(engine),
         SqlAdmin(engine),
         resources=resources,
+        tokens=SqlTokens(engine),
+        a2a=SqlA2A(engine),
     )
