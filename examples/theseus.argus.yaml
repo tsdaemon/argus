@@ -1,7 +1,6 @@
 # A real-shaped Argus config for the "theseus" NAS (https://github.com/tsdaemon/theseus).
-# No secrets here — the ntfy topic and break-glass token are supplied via environment
-# variables at runtime, not committed. This file is an example of wiring a real
-# deployment's config, not something the argus-mcp package itself depends on.
+# No secrets here: credentials, the ntfy topic, and the router's SSH port are supplied
+# via environment variables at runtime (see docker-compose.deploy.yml.example).
 
 providers:
   docker:
@@ -13,22 +12,40 @@ providers:
 
   breakglass:
     enabled: true
-    approval_url: https://argus.theseus.internal
+    # Where the ntfy push links to; the deploy overlay builds it from theseus's IP and port.
+    approval_url: ${ARGUS_APPROVAL_URL}
     notify:
       type: ntfy
       topic_url: ${ARGUS_NTFY_TOPIC_URL}
     # Hosts are prepared by autohome's `breakglass` role (see docs/breakglass.md): a
     # dedicated user, the launcher script, and a forced-command key. Use the LAN address
-    # of each host; the container cannot resolve .local names.
-    # launcher:
-    #   type: ssh
-    #   identity_file: /run/secrets/argus_launcher_key
-    #   permission_mode: manual
-    #   ttl_seconds: 900
-    #   hosts:
-    #     theseus:
-    #       host: 192.168.0.7
-    #       user: argus-bg
+    # of each host; the container cannot resolve .local names. Host keys come from the
+    # known_hosts secret at /home/argus/.ssh/known_hosts.
+    launcher:
+      type: ssh
+      identity_file: /run/secrets/argus_launcher_key
+      permission_mode: manual
+      ttl_seconds: 3600
+      hosts:
+        theseus:
+          host: 192.168.0.7
+          user: argus-bg
+
+  # Shell on named hosts; each command is classified (read runs, mutate asks, destroy
+  # refused). Key and known_hosts are deploy secrets; see docker-compose.deploy.yml.example.
+  ssh:
+    enabled: true
+    identity_file: /run/secrets/argus_ssh_key
+    known_hosts_file: /home/argus/.ssh/known_hosts
+    classifier:
+      type: jev
+      api_key: ${OPENROUTER_API_KEY}
+    hosts:
+      router:
+        host: 192.168.0.1
+        port: ${ARGUS_ROUTER_SSH_PORT}
+        user: admin
+        description: Asuswrt-Merlin home router (RT-AC88U, BusyBox), root shell
 
 policy:
   default_mutate: require_approval
@@ -38,3 +55,15 @@ policy:
     # that's already the default_mutate behavior — spelled out here so it survives a
     # future change to the default without silently loosening this one.
     docker.restart_container: require_approval
+
+agent:
+  # On the argus-agent-workspace volume (docker-compose.yml).
+  workspace_root: /var/lib/argus/agent-workspace
+  database_url: ${ARGUS_AGENT_DATABASE_URL}
+  api_key: ${OPENROUTER_API_KEY}
+  model_base_url: https://openrouter.ai/api/v1
+  model: google/gemini-3.7-flash
+  worker_model: stepfun/step-3.7-flash
+  otel:
+    enabled: true
+    endpoint: http://phoenix:6006/v1/traces

@@ -13,7 +13,7 @@ from argus.providers.registry import instantiate_providers
 from argus.providers.ssh_provider import SshProvider
 
 HOSTS = {
-    "router": {"host": "192.168.0.1", "port": 8034, "user": "admin", "description": "home router"},
+    "router": {"host": "192.168.0.1", "port": 2222, "user": "admin", "description": "home router"},
     "nas": {"host": "192.168.0.7", "description": "NAS", "timeout_seconds": 0.01},
 }
 
@@ -112,7 +112,7 @@ async def test_runs_on_the_named_host_with_shared_and_own_settings():
 
     assert mock_exec.call_args.args == (
         "ssh", "-tt", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10",
-        "-o", "LogLevel=ERROR", "-p", "8034",
+        "-o", "LogLevel=ERROR", "-p", "2222",
         "-i", "/keys/argus_ssh", "-o", "UserKnownHostsFile=/keys/known_hosts",
         "--", "admin@192.168.0.1", "ip route",
     )

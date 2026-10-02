@@ -127,21 +127,40 @@ tasks:
   # Requires docker-compose.deploy.yml and .env.deploy; copy their .example templates.
 
   deploy:
-    desc: Deploy to theseus.
+    desc: Deploy to theseus (the container migrates on start).
     dotenv: [".env.deploy"]
     cmds:
-      - docker --context theseus compose --profile app -f docker-compose.yml -f docker-compose.deploy.yml
-        up -d --build
+      - scripts/theseus-compose.sh up -d --build postgres phoenix
+      # Always recreated: Compose misses changes to a config's or secret's contents.
+      - scripts/theseus-compose.sh up -d --build --force-recreate argus
+
+  deploy:workspace:
+    desc: Create the agent workspace directory on theseus, owned by the argus user (once, before deploy).
+    dotenv: [".env.deploy"]
+    cmds:
+      # A throwaway root container, since creating it under /appdata needs root on theseus.
+      - >-
+        docker --context theseus run --rm -v "$(dirname "$(dirname "$ARGUS_WORKSPACE_DIR")"):/mnt"
+        alpine:3.22 sh -c 'mkdir -p "/mnt/$0" && chown "$1:$2" "/mnt/$0" "$(dirname "/mnt/$0")"
+        && chmod 770 "$(dirname "/mnt/$0")"'
+        "$(basename "$(dirname "$ARGUS_WORKSPACE_DIR")")/$(basename "$ARGUS_WORKSPACE_DIR")"
+        "$ARGUS_UID" "$ARGUS_GID"
+
+  deploy:sync:
+    desc: Merge conversations and agent workspace between local and theseus, both ways (asks first).
+    dotenv: [".env.deploy"]
+    cmds:
+      - scripts/sync-to-theseus.sh
+    interactive: true
 
   deploy:down:
     desc: Stop Argus on theseus.
     dotenv: [".env.deploy"]
     cmds:
-      - docker --context theseus compose --profile app -f docker-compose.yml -f docker-compose.deploy.yml down
+      - scripts/theseus-compose.sh down
 
   deploy:logs:
     desc: Follow Argus's logs on theseus.
     dotenv: [".env.deploy"]
     cmds:
-      - docker --context theseus compose --profile app -f docker-compose.yml -f docker-compose.deploy.yml
-        logs -f
+      - scripts/theseus-compose.sh logs -f

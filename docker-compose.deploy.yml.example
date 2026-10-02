@@ -1,14 +1,21 @@
 # Theseus deploy overlay template — copy to docker-compose.deploy.yml (gitignored,
 # kept out of this generic repo on purpose) and fill in the placeholders.
 #
-# Deploy with:
-#   docker --context theseus compose --profile app -f docker-compose.yml -f docker-compose.deploy.yml \
-#     up -d --build
-# (wrapped as `task deploy` — see Taskfile.yaml, dotenv: ['.env.deploy']).
+# Use it through `task deploy` (and deploy:migrate, deploy:down, deploy:logs), which run
+# scripts/theseus-compose.sh with .env and .env.deploy loaded. The Docker daemon is remote,
+# so a bind mount of a path on this machine would resolve on theseus instead. The script
+# reads the config and SSH files here into ARGUS_* env vars, and this overlay injects them
+# as configs and secrets, which Compose copies into the container.
 
 services:
   argus:
     restart: unless-stopped
+    # Runs as theseus:users, like the other services there, so the workspace on the host
+    # belongs to it. DOCKER_GID (in .env.deploy) gives it the socket.
+    build:
+      args:
+        ARGUS_UID: ${ARGUS_UID:?set ARGUS_UID in .env.deploy}
+        ARGUS_GID: ${ARGUS_GID:?set ARGUS_GID in .env.deploy}
     # Traefik on theseus discovers containers over the Docker socket via labels —
     # no shared network to join. web_local only: plain HTTP, LAN-only hostname. If
     # /breakglass needs to be reachable from off-LAN, route it through the existing
@@ -17,50 +24,70 @@ services:
     # /mcp itself has no business being reachable from outside the LAN/tailnet at
     # all: it's the whole agent-facing control plane, guarded only by one bearer
     # token, not something to hand the public internet a shot at.
+    # The base file's host port (ARGUS_PORT) stays published, for direct access by IP.
     labels:
       traefik.enable: "true"
       traefik.http.routers.argus.rule: "Host(`${APP_HOSTNAME_LOCAL}`)"
       traefik.http.routers.argus.entrypoints: "web_local"
       traefik.http.services.argus.loadbalancer.server.port: "8421"
+      homepage.group: Applications
       # mdi-eye-outline: a built-in Homepage icon slug, not an app-served one — Argus
       # has no icon endpoint of its own, unlike the skill's usual pattern.
       homepage.icon: mdi-eye-outline
       homepage.name: Argus
-      # LAN-local by design, not APP_PUBLIC_URL (the skill's usual pattern): Homepage
-      # itself is a LAN dashboard, and /mcp deliberately has no public URL to begin
-      # with. No token in this URL — the whole app is behind the admin login
-      # (ARGUS_ADMIN_PASSWORD below seeds its password).
-      homepage.href: "http://${APP_HOSTNAME_LOCAL}/breakglass"
+      # By IP, like the ntfy links: not every device resolves LAN hostnames. The whole app is
+      # behind the admin login.
+      homepage.href: "http://${APP_HOSTNAME_IP:?set APP_HOSTNAME_IP in .env.deploy}:${ARGUS_PORT:-8421}/"
       homepage.description: Home infrastructure agent with chat and MCP interfaces
-    # Dev-only host publish isn't needed once Traefik can reach the container
-    # directly over the Docker network.
-    ports: !reset []
     environment:
-      ARGUS_MCP_TOKEN: ${DEPLOY_ARGUS_MCP_TOKEN}
+      ARGUS_MCP_TOKEN: ${DEPLOY_ARGUS_MCP_TOKEN:-}
       ARGUS_ADMIN_PASSWORD: ${DEPLOY_ARGUS_ADMIN_PASSWORD:?set DEPLOY_ARGUS_ADMIN_PASSWORD in .env.deploy}
       ARGUS_NTFY_TOPIC_URL: ${ARGUS_NTFY_TOPIC_URL:-}
-    volumes:
-      - ${CONFIG_FILE:-./examples/theseus.argus.yaml}:/config/argus.yaml:ro
+      # Referenced by examples/theseus.argus.yaml.
+      ARGUS_APPROVAL_URL: http://${APP_HOSTNAME_IP:?set APP_HOSTNAME_IP in .env.deploy}:${ARGUS_PORT:-8421}
+      ARGUS_ROUTER_SSH_PORT: ${ARGUS_ROUTER_SSH_PORT:?set ARGUS_ROUTER_SSH_PORT in .env}
+    # Replaces the base file's config bind mount with the config below. The workspace is a
+    # host directory, so theseus's backups include it; create it once with
+    # `task deploy:workspace`.
+    volumes: !override
+      - ${ARGUS_WORKSPACE_DIR:?set ARGUS_WORKSPACE_DIR in .env.deploy}:/var/lib/argus/agent-workspace
       - /var/run/docker.sock:/var/run/docker.sock
-    # Break-glass launcher credentials, injected as Docker secrets. The deploy runs against
-    # a remote context, so a bind mount of a local path would resolve on theseus, not on
-    # this machine; Compose copies secret files from here into the container instead.
-    # Mode 0400 and root ownership because ssh refuses a private key others can read.
+    configs:
+      - source: argus_config
+        target: /config/argus.yaml
+    # Owned by the argus user, 0400, because ssh refuses a private key others can read.
     secrets:
       - source: argus_launcher_key
         target: /run/secrets/argus_launcher_key
-        uid: "0"
-        gid: "0"
+        uid: ${ARGUS_UID}
+        gid: ${ARGUS_GID}
         mode: 0400
-      # ssh runs in batch mode, so it needs the target hosts' keys up front.
+      - source: argus_ssh_key
+        target: /run/secrets/argus_ssh_key
+        uid: ${ARGUS_UID}
+        gid: ${ARGUS_GID}
+        mode: 0400
+      # ssh runs in batch mode, so it needs the target hosts' keys up front. The launcher
+      # reads the argus user's default file; the ssh provider names it in its config.
       - source: argus_known_hosts
-        target: /root/.ssh/known_hosts
-        uid: "0"
-        gid: "0"
+        target: /home/argus/.ssh/known_hosts
+        uid: ${ARGUS_UID}
+        gid: ${ARGUS_GID}
         mode: 0644
+
+  phoenix:
+    # Published on the LAN, not just theseus's loopback, to open traces by IP.
+    ports: !override
+      - "${PHOENIX_PORT:-6006}:6006"
+
+configs:
+  argus_config:
+    content: ${ARGUS_CONFIG_YAML:?run through scripts/theseus-compose.sh}
 
 secrets:
   argus_launcher_key:
-    file: ${ARGUS_LAUNCHER_KEY_PATH:?set ARGUS_LAUNCHER_KEY_PATH in .env.deploy}
+    environment: ARGUS_LAUNCHER_KEY
+  argus_ssh_key:
+    environment: ARGUS_SSH_KEY
   argus_known_hosts:
-    file: ${ARGUS_KNOWN_HOSTS_PATH:?set ARGUS_KNOWN_HOSTS_PATH in .env.deploy}
+    environment: ARGUS_KNOWN_HOSTS

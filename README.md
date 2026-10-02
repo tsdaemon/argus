@@ -198,9 +198,15 @@ repo should carry. Copy the committed templates to get started:
 ```bash
 cp docker-compose.deploy.yml.example docker-compose.deploy.yml   # then fill in the placeholders
 cp .env.deploy.example .env.deploy
-task deploy         # docker --context theseus compose --profile app -f docker-compose.yml -f docker-compose.deploy.yml up -d --build
+task deploy:workspace  # once: create /appdata/argus/workspace owned by theseus
+task deploy         # up -d --build via scripts/theseus-compose.sh; the container migrates on start
 task deploy:logs
+task deploy:sync    # merge conversations and agent workspace both ways with local
 ```
+
+The Docker daemon is remote, so nothing is bind-mounted from this machine:
+`scripts/theseus-compose.sh` reads the config and SSH keys here and the overlay injects them
+as Compose configs and secrets.
 
 ## Configuration
 

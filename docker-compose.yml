@@ -7,8 +7,8 @@ services:
       - postgres
       - phoenix
     ports:
-      # One process, one port: /agent (AG-UI) and, if ARGUS_MCP_TOKEN is set, /mcp +
-      # /breakglass are all served here — see the README.
+      # One process, one port: the UI, /agent (AG-UI), /breakglass, and, if ARGUS_MCP_TOKEN
+      # is set, /mcp are all served here — see the README.
       - "${ARGUS_PORT:-8421}:8421"
     environment:
       ARGUS_MCP_TOKEN: ${ARGUS_MCP_TOKEN:-}
@@ -16,6 +16,9 @@ services:
       ARGUS_NTFY_TOPIC_URL: ${ARGUS_NTFY_TOPIC_URL:-}
       ARGUS_AGENT_DATABASE_URL: postgresql://argus:${POSTGRES_PASSWORD}@postgres:5432/argus
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+    # The host's docker group, which owns the socket below (`stat -c %g /var/run/docker.sock`).
+    group_add:
+      - "${DOCKER_GID:-999}"
     volumes:
       - ${CONFIG_FILE:-./examples/argus.example.yaml}:/config/argus.yaml:ro
       - argus-agent-workspace:/var/lib/argus/agent-workspace
@@ -50,38 +53,6 @@ services:
     restart: unless-stopped
     ports:
       - "127.0.0.1:6006:6006"
-
-  # Disposable Docker targets: a/b are allowlisted; hidden tests access restrictions.
-  # They have no host ports or data and run only with the test profile.
-  canary-a:
-    profiles: [test]
-    image: alpine:3.22
-    container_name: argus-live-a
-    restart: "no"
-    command:
-      - /bin/sh
-      - -c
-      - "trap 'exit 0' TERM INT; while :; do echo argus-live-heartbeat; sleep 5; done"
-
-  canary-b:
-    profiles: [test]
-    image: alpine:3.22
-    container_name: argus-live-b
-    restart: "no"
-    command:
-      - /bin/sh
-      - -c
-      - "trap 'exit 0' TERM INT; while :; do echo argus-live-heartbeat; sleep 5; done"
-
-  canary-hidden:
-    profiles: [test]
-    image: alpine:3.22
-    container_name: argus-live-hidden
-    restart: "no"
-    command:
-      - /bin/sh
-      - -c
-      - "trap 'exit 0' TERM INT; while :; do echo argus-live-heartbeat; sleep 5; done"
 
 volumes:
   argus-agent-workspace:

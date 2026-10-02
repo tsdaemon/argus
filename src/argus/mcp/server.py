@@ -15,10 +15,8 @@ from fastmcp.server.http import StarletteWithLifespan
 
 from argus.config import ArgusConfig
 from argus.mcp.elicit import ElicitApproval
-from argus.mcp.webapp import add_breakglass_routes
 from argus.policy import PolicyEngine
 from argus.providers.base import Provider
-from argus.providers.breakglass_provider import BreakglassProvider
 from argus.providers.registry import instantiate_providers
 
 
@@ -46,13 +44,6 @@ def build_server(
     return mcp, providers
 
 
-def build_http_app(mcp: FastMCP, providers: dict[str, Provider]) -> StarletteWithLifespan:
-    """Build the sub-app mounted by `argus.api.app`: `/mcp` and, when configured,
-    the login-gated break-glass web routes."""
-    app = mcp.http_app(path="/mcp")
-
-    breakglass = providers.get("breakglass")
-    if isinstance(breakglass, BreakglassProvider):
-        add_breakglass_routes(app, breakglass.repository, breakglass.admin, breakglass.launcher)
-
-    return app
+def build_http_app(mcp: FastMCP) -> StarletteWithLifespan:
+    """Build the sub-app `argus.api.app` mounts for `/mcp`."""
+    return mcp.http_app(path="/mcp")

@@ -54,8 +54,13 @@ register_harness_profile(
 
 
 def _build_model(config: AgentConfig, model_name: str) -> ChatOpenAI:
+    # OpenRouter models come without a profile; deepagents derives its summarization
+    # thresholds from `max_input_tokens`, and falls back to 170k tokens without it.
     return CostReportingChatOpenAI(
-        model=model_name, base_url=config.model_base_url, api_key=config.api_key
+        model=model_name,
+        base_url=config.model_base_url,
+        api_key=config.api_key,
+        profile={"max_input_tokens": config.context_tokens},
     )
 
 

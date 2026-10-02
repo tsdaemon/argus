@@ -28,7 +28,9 @@ from argus.db.checkpointer import make_checkpointer
 from argus.db.history import HistoryRepository, SqlHistory, make_engine
 from argus.mcp.auth import StaticTokenVerifier
 from argus.mcp.server import build_http_app, build_server
+from argus.mcp.webapp import add_breakglass_routes
 from argus.policy import PolicyEngine
+from argus.providers.breakglass_provider import BreakglassProvider
 from argus.providers.registry import instantiate_providers
 from argus.webauth import AdminAuth
 
@@ -48,16 +50,14 @@ def build_app(
     # before `FastAPI(...)` is built, even though it's mounted at the end (see above).
     admin_auth = AdminAuth(admin) if admin is not None else None
     mcp_app = None
-    launch_enabled = False
     mcp_token = os.environ.get("ARGUS_MCP_TOKEN")
     if mcp_token:
-        mcp, mcp_providers = build_server(
+        mcp, _ = build_server(
             config,
             auth=StaticTokenVerifier(mcp_token),
             dependencies={"breakglass": {"repository": breakglass, "admin": admin_auth}},
         )
-        mcp_app = build_http_app(mcp, mcp_providers)
-        launch_enabled = getattr(mcp_providers.get("breakglass"), "launcher", None) is not None
+        mcp_app = build_http_app(mcp)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -97,6 +97,18 @@ def build_app(
     )
     add_chat_routes(app, agui_agent, history)
 
+    # The break-glass pages are for the human, so they come with break-glass, not with /mcp.
+    breakglass_provider = providers.get("breakglass")
+    launch_enabled = False
+    if isinstance(breakglass_provider, BreakglassProvider):
+        add_breakglass_routes(
+            app,
+            breakglass_provider.repository,
+            breakglass_provider.admin,
+            breakglass_provider.launcher,
+        )
+        launch_enabled = breakglass_provider.launcher is not None
+
     @app.get("/agent/health")
     async def health() -> dict[str, str]:
         return {"status": "ok"}
@@ -119,8 +131,7 @@ def build_app(
 
         app.mount("/assets", StaticFiles(directory=frontend_dir / "assets"), name="assets")
 
-    # One process, both interfaces — /mcp and /breakglass/launch (the agent UI's
-    # break-glass action reuses this page rather than a second implementation).
+    # One process, both interfaces: /mcp beside the agent's routes.
     if mcp_app is not None:
         app.mount("/", mcp_app)
 

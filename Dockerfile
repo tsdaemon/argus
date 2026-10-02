@@ -17,10 +17,18 @@ RUN uv sync --frozen
 
 FROM python:3.12-slim
 
-# openssh-client: only needed if the breakglass `launcher: {type: ssh}` is configured
-# (see README "Session launch") — harmless to always include.
-RUN apt-get update && apt-get install -y --no-install-recommends openssh-client \
+# openssh-client: the ssh provider and the break-glass launcher. rsync: `task deploy:sync`
+# copies the workspace in and out through `docker exec`.
+RUN apt-get update && apt-get install -y --no-install-recommends openssh-client rsync \
     && rm -rf /var/lib/apt/lists/*
+
+# A real account, since ssh refuses to run for a uid without one. Build with the uid/gid that
+# should own the workspace on the host (the deploy overlay passes theseus's).
+ARG ARGUS_UID=1000
+ARG ARGUS_GID=100
+RUN groupadd --gid "$ARGUS_GID" --non-unique argus \
+    && useradd --uid "$ARGUS_UID" --gid "$ARGUS_GID" --non-unique --create-home argus \
+    && mkdir -p /var/lib/argus/agent-workspace && chown argus: /var/lib/argus/agent-workspace
 
 WORKDIR /app
 COPY --from=builder /app/.venv /app/.venv
@@ -29,11 +37,11 @@ COPY alembic.ini ./
 COPY --from=frontend /frontend/dist ./src/argus/api/static
 ENV PATH="/app/.venv/bin:$PATH"
 
-# Runs as root by default: the docker provider needs to reach a socket mounted in
-# from the host, and container root is not host root. If you don't need the docker
-# provider, drop the socket mount and run as a non-root user instead.
+# The docker provider reaches the host's socket through its group (compose's group_add).
+USER argus
 
 ENV ARGUS_CONFIG=/config/argus.yaml
 EXPOSE 8421
-ENTRYPOINT ["uvicorn", "argus.api.app:create_app", "--factory"]
+# Migrations run on every start; a no-op when the schema is current.
+ENTRYPOINT ["sh", "-c", "alembic upgrade head && exec uvicorn argus.api.app:create_app --factory \"$@\"", "argus"]
 CMD ["--host", "0.0.0.0", "--port", "8421"]

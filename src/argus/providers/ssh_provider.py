@@ -79,6 +79,8 @@ class SshProvider:
         for name, entry in hosts.items():
             settings = {**defaults, **entry}
             classifier_config = settings.pop("classifier", None)
+            # `${ENV_VAR}` expansion yields a string.
+            settings["port"] = int(settings.get("port", 22))
             host = SshHost(name=name, **settings)
             self._hosts[name] = host
             self._classifiers[name] = (classifiers or {}).get(name) or build_classifier(

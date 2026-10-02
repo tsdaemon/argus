@@ -60,6 +60,11 @@ class ArgusAgent(LangGraphAgent):
     tool_classes: Mapping[str, ToolClass] = MappingProxyType({})
     _resuming = False
 
+    def get_state_snapshot(self, state: dict[str, Any]) -> dict[str, Any]:
+        """STATE_SNAPSHOT without `messages`: the UI takes messages from MESSAGES_SNAPSHOT
+        and reads no agent state, so each copy would only be another full transcript."""
+        return {k: v for k, v in super().get_state_snapshot(state).items() if k != "messages"}
+
     def clone(self) -> ArgusAgent:
         copy = super().clone()
         copy.tool_classes = self.tool_classes
@@ -202,6 +207,9 @@ def build_agent(
         config={"recursion_limit": config.recursion_limit},
         emit_interrupt_outcome=True,
         enable_legacy_on_interrupt_event=False,
+        # RAW re-sends every LangGraph event, each with the whole message state (attachments
+        # included); in a long thread that was hundreds of MB per run. The UI never reads it.
+        emit_raw_events=False,
     )
     agent.tool_classes = {
         external_name(spec.tool_id): spec.tool_class

@@ -149,10 +149,12 @@ def test_frontend_assets_and_launcher_availability(
         assert "Argus chat" in client.get("/").text
         assert client.get("/assets/app.js").text == "/* UI bundle */"
         assert client.get("/api/ui-config").json() == {
-            "launch_enabled": mcp_enabled and launcher_enabled,
+            "launch_enabled": launcher_enabled,
             "auth_enabled": True,
         }
-        if mcp_enabled and launcher_enabled:
+        # The break-glass pages do not depend on /mcp being enabled.
+        assert client.get("/breakglass", follow_redirects=False).status_code == 200
+        if launcher_enabled:
             assert client.get("/launch", follow_redirects=False).status_code == 200
         assert client.post("/agent", json={}).status_code == 422
 

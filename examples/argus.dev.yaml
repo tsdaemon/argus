@@ -37,7 +37,7 @@ providers:
     hosts:
       router:
         host: 192.168.0.1
-        port: 8034
+        port: ${ARGUS_ROUTER_SSH_PORT}  # nonstandard; kept in .env
         user: admin
         description: Asuswrt-Merlin home router (RT-AC88U, BusyBox), root shell
 

@@ -23,8 +23,8 @@ one FastAPI process on port **8421** by default. There is no MCP-only runtime, s
 mode, or separate MCP server command. Do not reintroduce one, including for testing.
 It serves the built React/CopilotKit UI at `/`, chat/history routes under `/api/threads`,
 `/agent` (AG-UI), and `/agent/health`. When `ARGUS_MCP_TOKEN` is set, it also mounts
-the MCP application at `/mcp`; enabling the `breakglass` provider adds `/breakglass`,
-`/login`, and `/launch` through that same mounted application.
+the MCP application at `/mcp`. Enabling the `breakglass` provider adds `/breakglass` and
+`/launch` to the main app, with or without `/mcp`.
 
 The agent invokes provider tools directly in-process; MCP exposes them to external callers.
 External clients such as Hermes or Claude Code can call the same provider implementations
@@ -141,6 +141,9 @@ the app without an admin repository get an open app on purpose.
   Keep deepagents' default general-purpose subagent disabled via `HarnessProfile`.
 - **Use deepagents for workspace, skills, memory, and summarization.** `create_deep_agent()`
   returns a normal LangGraph `CompiledStateGraph`; checkpointing/resumption stays visible.
+  Summarization is deepagents' default middleware, which sizes itself from the model's
+  `profile`; OpenRouter models have none, so `_build_model` sets `max_input_tokens` to
+  `agent.context_tokens` (64k), giving a trigger at 85% instead of the 170k-token fallback.
   Filesystem tools are `ls`, `read_file`, `write_file`, `edit_file`, `delete`, `glob`, and
   `grep`; arbitrary shell `execute` is excluded. Skills live under `skills/`. Memory
   (`agent/memory.py`) splits conventions from facts: workspace `AGENTS.md` is the operator's
@@ -155,8 +158,8 @@ the app without an admin repository get an open app on purpose.
   `approvals`, migrated explicitly with Alembic. The API indexes conversations and upserts
   AG-UI snapshots into `messages`, retaining older messages through context summarization.
   Separate run/tool/approval audit instrumentation remains unfinished. Markdown is explicit
-  memory; durable artifacts are future work. Do not hand-edit LangGraph's schema or silently
-  run Argus migrations at boot.
+  memory; durable artifacts are future work. Do not hand-edit LangGraph's schema. The container runs
+  `alembic upgrade head` before starting (`Dockerfile` entrypoint).
 - **CopilotKit owns the chat/interrupt lifecycle.** `frontend/src/agent.ts` supplies a
   read-only connect stream and sends only the newest user message on new runs; do not feed
   the visible historical archive back into the graph. Approval resumes send no messages.
@@ -176,6 +179,11 @@ the app without an admin repository get an open app on purpose.
   9,999 deepagents sets on the graph. `build_agent` passes `agent.recursion_limit` (default 200)
   as the adapter's config. A run that fails, this limit included, ends with a `RUN_ERROR` event
   from `ArgusAgent.run` rather than a dropped stream, and its checkpoint reads as stalled.
+- **A run streams the transcript once.** The AG-UI adapter's `RAW` passthrough is off
+  (`emit_raw_events=False`) and `ArgusAgent.get_state_snapshot` drops `messages`: both repeated
+  the whole message state, attachments included, per graph step, which froze the UI in long
+  threads. The UI reads only `MESSAGES_SNAPSHOT`; `test_run_stream_carries_the_transcript_once`
+  guards this.
 - **Chat attachments are inline.** CopilotKit's `attachments` (images, PDFs, text files, 10 MB
   each) send base64 parts in the user message; the adapter turns them into LangChain
   `image_url`/`file` blocks that OpenRouter accepts. `ArgusHttpAgent.requestInit` inlines text
@@ -224,7 +232,7 @@ the app without an admin repository get an open app on purpose.
   Playwright; `task backend:test` runs pytest alone; `task lint` runs ruff. Pre-commit
   configuration exists, but no CI workflow is committed yet.
 - Local startup uses `task deps:up`, **`task backend:migrate`**, `task frontend:build`, then
-  `task backend:dev`. Argus-owned migrations remain an explicit operation. The default local
+  `task backend:dev`. Locally migrations are a task step; the container runs them on start. The default local
   config is `examples/argus.dev.yaml`, with private workspace `.argus/workspace` and
   Docker tools scoped to `argus-live-a` and `argus-live-b`. Local
   development has that one config; do not add per-developer copies. Keep the workspace on the host for live inspection.
@@ -258,11 +266,18 @@ the app without an admin repository get an open app on purpose.
   `${ENV_VAR}`, that variable must exist (an empty value is allowed), or config loading fails.
 - `ARGUS_BREAKGLASS_SESSIONS_DIR` is read on the **target host** by the launcher script that
   autohome installs, and defaults to `~/.argus/breakglass-sessions`.
-- `examples/argus.example.yaml` includes agent configuration. `examples/theseus.argus.yaml`
-  currently covers providers/policy and has no `agent:` block; add the appropriate database,
-  model credential, and workspace configuration before using it for an agent deployment.
+- `examples/theseus.argus.yaml` is the deployed config; secrets and the router's SSH port
+  (`ARGUS_ROUTER_SSH_PORT`, also used by the dev config) come from the environment.
 - `docker-compose.deploy.yml` and `.env.deploy` are deliberately gitignored local overlays;
   copy their `.example` templates and fill in actual deployment values when deploying.
+  `task deploy` runs everything through `scripts/theseus-compose.sh`: the daemon is remote, so
+  bind mounts and `file:` secrets would resolve on theseus; the script reads the config and
+  keys locally into env vars that the overlay injects as configs and secrets.
+  The image runs as a non-root `argus` user whose uid/gid are build args; the deploy builds it
+  as theseus:users (1001:100), reaching the Docker socket through `group_add`. The deployed
+  workspace is the host directory `/appdata/argus/workspace` (backed up with the rest of
+  `/appdata`), created once by `task deploy:workspace`. `task deploy:sync` merges conversations
+  and workspace both ways; files go through `rsync -e 'compose exec'` into the container.
 
 Keep real-service checks distinct from fake-model and mocked-client tests when updating the
 ledger. Report what was run, what passed or skipped, and what remains unverified.

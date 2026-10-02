@@ -61,6 +61,9 @@ agent:
   # for the full `<provider>/<model>` id catalog.
   model: google/gemini-3.7-flash
   api_key: ${OPENROUTER_API_KEY}
+  # Context budget for summarization: at 85% of this, older turns are summarized and saved
+  # to the workspace's conversation_history/. OpenRouter models declare no window of their own.
+  # context_tokens: 64000
   otel:
     enabled: false
     endpoint: http://phoenix:4317

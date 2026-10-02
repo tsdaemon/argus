@@ -63,6 +63,10 @@ class AgentConfig(BaseModel):
     # Graph steps per run; a model turn and its tool calls take about three. Caps a runaway
     # loop; a run that hits it stops with an error and can be resumed.
     recursion_limit: int = 200
+    # The context budget both models are treated as having. deepagents summarizes a
+    # conversation once it reaches 85% of this, keeping the newest 10% verbatim and saving
+    # the rest to the workspace's conversation_history/. Lower means cheaper turns.
+    context_tokens: int = 64_000
     otel: OtelConfig = OtelConfig()
 
 

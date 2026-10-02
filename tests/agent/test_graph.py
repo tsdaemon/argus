@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 from deepagents import GeneralPurposeSubagentProfile, HarnessProfile, register_harness_profile
 from deepagents._models import get_model_provider
+from deepagents.middleware.summarization import compute_summarization_defaults
 from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
 from langchain_openai import ChatOpenAI
 from langgraph.checkpoint.memory import InMemorySaver
@@ -160,6 +161,16 @@ def test_build_model_resolves_as_openai_provider():
     model = _build_model(config, config.model)
 
     assert get_model_provider(model) == "openai"
+
+
+def test_context_budget_sets_summarization_threshold():
+    """Without a profile deepagents would wait for 170k tokens before summarizing."""
+    config = AgentConfig(api_key="sk-or-fake", context_tokens=50_000)
+
+    defaults = compute_summarization_defaults(_build_model(config, config.model))
+
+    assert defaults["trigger"] == ("fraction", 0.85)
+    assert defaults["keep"] == ("fraction", 0.10)
 
 
 def test_planner_and_worker_use_different_models():

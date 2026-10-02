@@ -325,3 +325,15 @@ async def test_approval_round_trip_over_tcp(approval_app):
         finally:
             server.should_exit = True
             await asyncio.wait_for(serving, timeout=10)
+
+
+async def test_run_stream_carries_the_transcript_once(approval_app):
+    """RAW events and STATE_SNAPSHOT each repeat the whole message state, attachments
+    included; in a long thread that made every run hundreds of MB for the browser."""
+    app, _ = approval_app()
+    async with client_for(app) as client:
+        events = await run_agent(client, run_input(str(uuid4())))
+
+    assert not [event for event in events if event["type"] == "RAW"]
+    assert all("messages" not in e["snapshot"] for e in events if e["type"] == "STATE_SNAPSHOT")
+    assert [event["type"] for event in events].count("MESSAGES_SNAPSHOT") == 1

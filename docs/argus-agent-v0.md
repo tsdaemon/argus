@@ -131,8 +131,8 @@ Agreed 2026-09-20. Each item gets its own design pass before it is built.
   the agent chooses one; how to keep it read-only so a rendered component can never become
   a way around the approval flow; and how it is tested without a browser-only path.
 
-- `[ ]` **Deploy the router tool**: add `argus_ssh` and the router's host key to the
-  deploy overlay's secrets and `examples/theseus.argus.yaml`.
+- `[ ]` **First Theseus deployment**: config, overlay, and `task deploy` (build, migrate, up)
+  are in place, including the router tool and migrate-on-start; not yet run. See History, 2026-10-02.
 
 Provider roadmap beyond the current Docker/break-glass/router-shell tools: `systemd` (status,
 journal, restart), `disk`/SMART, and `network` probes. An asynchronous MCP approval-queue
@@ -162,8 +162,6 @@ No CI workflow is committed; pytest and ruff are the intended baseline.
   Recheck this integration when upgrading CopilotKit. Browser restoration replays a
   durable transcript and pending checkpoint approvals, not every past event or an
   in-flight run; full cross-tab live synchronization is not built.
-- `examples/theseus.argus.yaml` has no `agent:` block. Complete its database, model
-  credential, and workspace settings before using it for an agent deployment.
 - Real Hermes elicitation remains unobserved; the original compatibility investigation
   was documentation-only.
 - The Docker provider has not been exercised against a real daemon with real containers.
@@ -1087,7 +1085,7 @@ call. The tool runs without an approval card, since READ is allowed by policy.
 ### Router shell with per-command classification — 2026-10-01
 
 The agent gets `ssh_router` (`ssh.router`): any shell command on the RT-AC88U
-(Asuswrt-Merlin, `192.168.0.1:8034`, user `admin`), run over SSH with a new `argus_ssh` key.
+(Asuswrt-Merlin, `192.168.0.1`, user `admin`), run over SSH with a new `argus_ssh` key.
 Merlin's only SSH account is root, so nothing on the router narrows the key. A forced-command
 allowlist on the router was considered and rejected as too limiting; the agent should be able
 to act, with a classifier choosing when to ask. Each command goes to Jev (`typesafe/jev-1.13`
@@ -1260,3 +1258,85 @@ interrupt element, and cursor. Every message is rendered, which is fine at one o
 A Playwright test sends 26 turns (52 messages) and checks the first message is still in the DOM
 with no virtualized rows; it fails without the change. The fix has not yet been checked by hand
 in the browser on the conversation where it was seen.
+
+### Deploy wiring for Theseus — 2026-10-02
+
+The router's SSH port left the committed configs: both configs read `${ARGUS_ROUTER_SSH_PORT}`
+(from `.env`), and the ssh provider converts it to an integer. The port remains in earlier
+public history.
+
+`examples/theseus.argus.yaml` gained the `agent:` block (workspace on the Compose volume,
+tracing to `phoenix:6006`), the `ssh` provider for the router, the enabled break-glass
+launcher, and `approval_url` from `ARGUS_APPROVAL_URL`, which the overlay builds from
+`APP_HOSTNAME_LOCAL`.
+
+The overlay template's premise was wrong: over a remote Docker context, Compose implements
+`secrets: file:` as a bind mount of a path on the daemon's host, so the launcher key and the
+config bind mount would never have reached the container. A throwaway container on theseus
+(Compose v5.4.0) showed this failing, and showed `secrets: environment:` and `configs:
+content:` copied in, root-owned, with the requested mode. `scripts/theseus-compose.sh` now
+reads the config, both keys, and `known_hosts` locally into env vars, restoring the final
+newline ssh needs, and the overlay injects them. `.ssh/known_hosts` holds the router's keys
+and theseus's, copied from the operator's trusted `~/.ssh/known_hosts`. The argus host port
+stays published for direct access by IP; Phoenix is published on the LAN at `PHOENIX_PORT`.
+The image's entrypoint runs `alembic upgrade head` before uvicorn, so a deployed container
+migrates on every start; `task deploy` is just `up -d --build`.
+
+Verified: `compose config` through the script resolves ports, volumes, configs, and secrets as
+intended, with the config's `${VAR}` references left for argus to expand; the theseus config
+loads. Not run: the deploy itself, migrations against the deployed Postgres, or any tool call
+from the deployed container.
+
+`task deploy:sync` (`scripts/sync-to-theseus.sh`) merges local and theseus both ways,
+deleting nothing, after checking both sides share the Alembic revision and LangGraph checkpoint
+migration and asking for confirmation. Database rows go across as `pg_dump --inserts
+--on-conflict-do-nothing`, so each side gains the other's missing rows and keeps its own where
+a key exists on both; the chat-order sequence is then set to the merged maximum. Workspace
+files missing on one side are copied; differing files take the local version, listed before
+confirmation. Theseus keeps its own `admin_account`. Checked: the theseus workspace comparison
+(read-only), and the local dump loaded into the local database inside a rolled-back
+transaction (every row skipped as existing, sequence set). Not run: the sync against theseus.
+
+The container no longer runs as root. The image creates an `argus` user from `ARGUS_UID`/
+`ARGUS_GID` build args (default 1000:100; ssh needs a real account for its uid) and switches to
+it; Compose's `group_add` (`DOCKER_GID`) grants the Docker socket. The theseus deploy builds it as
+theseus:users (1001:100), like the other services there, with the SSH secrets owned by that uid
+(a throwaway container on theseus confirmed `uid`/`gid` work for environment-sourced secrets)
+and `known_hosts` at `/home/argus/.ssh/known_hosts`. The workspace moved from a named volume to
+`/appdata/argus/workspace` so theseus's backups cover it; `task deploy:workspace` creates it
+with the right owner. The sync now moves files with rsync through `compose exec`, which needs
+`rsync` in the image. Checked: the image built locally as 1001:100 (ssh, rsync, alembic
+present), and the rsync pull/push/dry-run listing against a local container of it. Not run on
+theseus: the rebuilt deploy or the sync.
+
+Links and router key, after the first deploy: ntfy approval links and the Homepage tile now use
+`http://${APP_HOSTNAME_IP}:${ARGUS_PORT}`, since a phone without LAN DNS cannot resolve
+`argus.theseus`. The router's SSH port had changed, so `known_hosts` still pinned its (unchanged)
+keys under the old `[host]:port` and the deployed ssh tool failed with "Host key verification
+failed"; the agent misread this as a changed host key. The keys were re-pinned under the new
+port, verified by a local connection. `task deploy` now always recreates the argus container,
+since Compose does not notice changed config or secret contents.
+
+The break-glass pages (`/breakglass`, `/launch`) were added only to the MCP sub-app, so with
+`ARGUS_MCP_TOKEN` unset (the theseus deploy) they returned 404 behind a valid login while ntfy
+still linked to them. `build_app` now adds them to the main app whenever the break-glass
+provider is enabled, and the MCP sub-app serves only `/mcp`. `test_app.py` previously asserted
+the old coupling (launch only with MCP); it now checks both pages without MCP.
+
+Summarization had never fired: deepagents sizes it from the chat model's `profile`, OpenRouter
+models have none, and the fallback trigger is 170k tokens. The longest conversation on theseus
+(414 messages: ~290k characters of tool output, ~120k of replies, plus ~2.2M characters of inline
+attachments) stayed below that, so every turn resent all of it. `agent.context_tokens`
+(default 64k) now becomes both models' `max_input_tokens`, so deepagents summarizes at 85% and
+keeps the newest 10%, offloading the rest to `conversation_history/` in the workspace. Covered by
+a unit test of the derived thresholds; not yet observed firing in a real conversation.
+
+The long router thread (438 messages, ~2.2 MB of inline images) froze the UI during runs. Loading
+it was fine (0.6 s; typing unaffected) and simulated text streaming caused no long tasks; the
+cost was the run stream. The adapter's default `RAW` passthrough re-sent every LangGraph event
+with the full message state, and each `STATE_SNAPSHOT` carried `messages` again: on the fake-model
+server, one 1 MB image made a single tool-call run stream 30 MB (40 `RAW` events, 26 MB). With
+`emit_raw_events=False` and messages dropped from state snapshots the same run is one
+`MESSAGES_SNAPSHOT`. Pytest and the 10 Playwright tests pass. Remaining cost: that one snapshot
+still carries every attachment as base64 (2.7 MB for this thread, ~0.7 s of main-thread work per
+run); serving attachments by URL would remove it.
