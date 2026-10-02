@@ -62,9 +62,24 @@ Agreed 2026-09-20. Each item gets its own design pass before it is built.
 
 1. **Notion** (above): small, needs no host access, and gives later items inventory context.
 2. **`prometheus` provider**: instant and range queries, active alerts, scrape targets, all
-   READ. SMART data is probably already scraped by a `prometheus-smartctl` exporter, which
-   would make a separate SMART provider unnecessary. To confirm: where Prometheus runs and
-   whether that exporter is scraped.
+   READ. Found on theseus 2026-10-02: `stats-prometheus` (Prometheus 3.15, compose project
+   `/appdata/stats`, network `o11y`) listens on port 9090 of theseus (`THESEUS_IP`) with no auth, and the
+   argus container and the dev machine both reach it. Scrape jobs: `telegraf` (CPU, memory,
+   disk, ZFS, Docker, sensors, hddtemp, net, ping; most of the ~4,800 series), `smartctl`
+   (`tsdaemon/prometheus-smartctl`, `smartprom_*` for `/dev/sda`, `sdb`, `sdc`), `traefik`,
+   `speedtest` (hourly), `wireguard` (wg-easy), and itself; all up. SMART is covered, so no
+   SMART provider. Rules are recording-only (`rules/network.yml`: `network_probe_success`,
+   `network_rtt_ms`, `network_jitter_ms`, `network_packet_loss_ratio` from ping); there are no
+   alerting rules and no Alertmanager, so the alerts tool returns nothing until rules exist.
+   Built 2026-10-02 (see History): config is `url` plus optional `timeout_seconds`; an `httpx.AsyncClient`;
+   tools `prometheus.query` (instant), `prometheus.query_range` (a `duration` back from an
+   optional `end`, with the step widened so no series exceeds a point cap),
+   `prometheus.list_metrics` (names with type and help, filtered by a substring, since the model
+   cannot query what it cannot name), `prometheus.label_values`, `prometheus.targets`, and
+   `prometheus.alerts`. Results are compacted to labels and values and capped in series count,
+   with a note when truncated; a Prometheus error comes back as its message so the model can fix
+   its PromQL. Tests use `httpx.MockTransport`. Both configs point at theseus's Prometheus,
+   since it is read-only. Loki and Promtail also run in `o11y` (`:3100`), relevant to item 3.
 3. **`journalctl` provider**: needs host access while argus runs in a container, so either a
    read-only journal mount or a read-only forced-command script installed by autohome, in the
    break-glass pattern. If logs already flow to Loki, a Loki provider replaces it.
@@ -1340,3 +1355,33 @@ server, one 1 MB image made a single tool-call run stream 30 MB (40 `RAW` events
 `MESSAGES_SNAPSHOT`. Pytest and the 10 Playwright tests pass. Remaining cost: that one snapshot
 still carries every attachment as base64 (2.7 MB for this thread, ~0.7 s of main-thread work per
 run); serving attachments by URL would remove it.
+
+### Prometheus provider and Phoenix login — 2026-10-02
+
+- `prometheus` provider (`providers/prometheus_provider.py`), as designed under Next up item 2:
+  six READ tools over `httpx`, registered in `PROVIDER_REGISTRY` and enabled in both configs
+  against `http://${THESEUS_IP}:9090`. MCP names are prefixed (`prometheus_query`), since the bare
+  function names would be ambiguous. `tests/test_prometheus_provider.py` (14 tests, mocked
+  transport) passes; the full backend suite passed with 222 passed and 15 skipped (the skips are
+  the Postgres-backed tests: the Postgres on 127.0.0.1:5432 rejected the `argus` password).
+- Live check against theseus's Prometheus, calling the tool functions directly (no model):
+  SMART temperatures per drive, a 6-hour `network_rtt_ms` range (step widened to 90s, four
+  targets), `list_metrics` with a filter, `label_values("job")`, all six targets up, zero
+  alerting rules, and a malformed query returning Prometheus's parse error. Not yet exercised
+  through the agent with a real model.
+- Deployed Phoenix gets a login and a Homepage tile (Monitoring group) in the deploy overlay:
+  `PHOENIX_ENABLE_AUTH` with `PHOENIX_SECRET`, `PHOENIX_ADMIN_SECRET`, and the admin's initial
+  password, all from `.env.deploy`. argus exports traces with the admin secret as
+  `PHOENIX_API_KEY`.
+- Phoenix stores its data in a `phoenix` database on argus's Postgres instead of SQLite in the
+  container layer, which every recreate (every deploy) wiped. A one-shot `phoenix-db` service
+  creates the database if missing, since Postgres init scripts run only on an empty volume.
+  Retention: 45 days, seeded as Phoenix's Default policy. Existing traces were not migrated.
+- Theseus's LAN IP moved out of the committed configs into `THESEUS_IP` (`.env`), which the deploy
+  overlay also uses for the Homepage links and approval URL, replacing `APP_HOSTNAME_IP`.
+- Deployed to theseus and checked there: Phoenix's REST API and OTLP endpoint answer 401 without a
+  token and 200 with the admin secret; a span exported from inside the argus container with
+  `PHOENIX_API_KEY` reached Phoenix (throwaway project, deleted); Homepage lists Phoenix under
+  Monitoring; the `phoenix` database holds the 45-day Default policy (checked locally); and the
+  deployed config expands `THESEUS_IP` and runs `prometheus.query`. Not checked: the browser login
+  page itself, and the Prometheus tools through the agent with a real model.

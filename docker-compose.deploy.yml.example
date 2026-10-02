@@ -37,15 +37,18 @@ services:
       homepage.name: Argus
       # By IP, like the ntfy links: not every device resolves LAN hostnames. The whole app is
       # behind the admin login.
-      homepage.href: "http://${APP_HOSTNAME_IP:?set APP_HOSTNAME_IP in .env.deploy}:${ARGUS_PORT:-8421}/"
+      homepage.href: "http://${THESEUS_IP:?set THESEUS_IP in .env}:${ARGUS_PORT:-8421}/"
       homepage.description: Home infrastructure agent with chat and MCP interfaces
     environment:
       ARGUS_MCP_TOKEN: ${DEPLOY_ARGUS_MCP_TOKEN:-}
       ARGUS_ADMIN_PASSWORD: ${DEPLOY_ARGUS_ADMIN_PASSWORD:?set DEPLOY_ARGUS_ADMIN_PASSWORD in .env.deploy}
       ARGUS_NTFY_TOPIC_URL: ${ARGUS_NTFY_TOPIC_URL:-}
       # Referenced by examples/theseus.argus.yaml.
-      ARGUS_APPROVAL_URL: http://${APP_HOSTNAME_IP:?set APP_HOSTNAME_IP in .env.deploy}:${ARGUS_PORT:-8421}
+      ARGUS_APPROVAL_URL: http://${THESEUS_IP:?set THESEUS_IP in .env}:${ARGUS_PORT:-8421}
       ARGUS_ROUTER_SSH_PORT: ${ARGUS_ROUTER_SSH_PORT:?set ARGUS_ROUTER_SSH_PORT in .env}
+      THESEUS_IP: ${THESEUS_IP:?set THESEUS_IP in .env}
+      # phoenix.otel sends it as the exporter's bearer token; Phoenix accepts its admin secret.
+      PHOENIX_API_KEY: ${DEPLOY_PHOENIX_ADMIN_SECRET:?set DEPLOY_PHOENIX_ADMIN_SECRET in .env.deploy}
     # Replaces the base file's config bind mount with the config below. The workspace is a
     # host directory, so theseus's backups include it; create it once with
     # `task deploy:workspace`.
@@ -79,6 +82,20 @@ services:
     # Published on the LAN, not just theseus's loopback, to open traces by IP.
     ports: !override
       - "${PHOENIX_PORT:-6006}:6006"
+    # Login for the UI (email `admin@localhost`). Ingestion then needs a token too: argus sends the admin
+    # secret, which is set here rather than created in the UI. The initial password only seeds
+    # the admin account, the first time Phoenix starts on its database.
+    environment:
+      PHOENIX_ENABLE_AUTH: "true"
+      PHOENIX_SECRET: ${DEPLOY_PHOENIX_SECRET:?set DEPLOY_PHOENIX_SECRET in .env.deploy}
+      PHOENIX_ADMIN_SECRET: ${DEPLOY_PHOENIX_ADMIN_SECRET:?set DEPLOY_PHOENIX_ADMIN_SECRET in .env.deploy}
+      PHOENIX_DEFAULT_ADMIN_INITIAL_PASSWORD: ${DEPLOY_PHOENIX_ADMIN_PASSWORD:?set DEPLOY_PHOENIX_ADMIN_PASSWORD in .env.deploy}
+    labels:
+      homepage.group: Monitoring
+      homepage.icon: mdi-chart-timeline-variant
+      homepage.name: Phoenix
+      homepage.href: "http://${THESEUS_IP:?set THESEUS_IP in .env}:${PHOENIX_PORT:-6006}/"
+      homepage.description: Traces and cost of argus agent runs
 
 configs:
   argus_config:

@@ -46,11 +46,40 @@ services:
       timeout: 3s
       retries: 30
 
+  # Creates Phoenix's database in this Postgres if it is missing. It runs on every start, since
+  # Postgres runs init scripts only on an empty volume.
+  phoenix-db:
+    image: postgres:16-alpine
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PGHOST: postgres
+      PGUSER: argus
+      PGDATABASE: argus
+      PGPASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+    command:
+      - sh
+      - -c
+      - psql -tAc "select 1 from pg_database where datname = 'phoenix'" | grep -q 1 || psql -c "create database phoenix"
+
   phoenix:
     # Stock Phoenix plus a patch that honours span-reported cost; see phoenix/Dockerfile.
     build: ./phoenix
     image: argus-phoenix:local
     restart: unless-stopped
+    depends_on:
+      phoenix-db:
+        condition: service_completed_successfully
+    # Traces, users, and API keys live in the `phoenix` database, so a recreate keeps them.
+    environment:
+      PHOENIX_POSTGRES_HOST: postgres
+      PHOENIX_POSTGRES_USER: argus
+      PHOENIX_POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      PHOENIX_POSTGRES_DB: phoenix
+      # Seeds the Default retention policy (pruned weekly) on a new database; change it later
+      # in Phoenix's settings.
+      PHOENIX_DEFAULT_RETENTION_POLICY_DAYS: "45"
     ports:
       - "127.0.0.1:6006:6006"
 

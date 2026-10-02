@@ -342,7 +342,7 @@ breakglass:
     ttl_seconds: 900               # session is killed after this regardless; omit to disable
     hosts:
       theseus:
-        host: 192.168.0.7
+        host: ${THESEUS_IP}
         user: argus-bg
 ```
 

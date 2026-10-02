@@ -14,7 +14,7 @@ from argus.providers.ssh_provider import SshProvider
 
 HOSTS = {
     "router": {"host": "192.168.0.1", "port": 2222, "user": "admin", "description": "home router"},
-    "nas": {"host": "192.168.0.7", "description": "NAS", "timeout_seconds": 0.01},
+    "nas": {"host": "192.0.2.7", "description": "NAS", "timeout_seconds": 0.01},
 }
 
 
@@ -128,7 +128,7 @@ async def test_host_defaults_to_root_on_port_22():
 
     args = mock_exec.call_args.args
     assert args[args.index("-p") + 1] == "22"
-    assert args[-2:] == ("root@192.168.0.7", "uptime")
+    assert args[-2:] == ("root@192.0.2.7", "uptime")
 
 
 @pytest.mark.asyncio

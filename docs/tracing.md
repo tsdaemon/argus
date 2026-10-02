@@ -117,7 +117,13 @@ keys, in USD, and that is what Phoenix consumes.
 - **Spans but no cost.** Cost appears only for calls that report it, which OpenRouter does.
   Confirm Phoenix is running the patched image (`docker ps` shows `argus-phoenix:local`, not
   `arizephoenix/phoenix`).
-- **Phoenix data disappears.** The container has no volume, so recreating it clears traces.
+- **Where Phoenix keeps data.** In the `phoenix` database of argus's Postgres (created by the
+  one-shot `phoenix-db` service), so recreating the container keeps traces. Traces older than
+  45 days are pruned weekly: `PHOENIX_DEFAULT_RETENTION_POLICY_DAYS` seeds that policy on a new
+  database, and later changes go through Phoenix's settings.
+- **Deployed Phoenix asks for a login.** Email `admin@localhost`, with the password seeded from
+  `DEPLOY_PHOENIX_ADMIN_PASSWORD`. argus exports with `PHOENIX_API_KEY` (the admin secret); a
+  401 on export means the two sides have different secrets.
 - **A warning "Tracing setup failed".** Read the log line; the agent still runs without traces.
 
 ## Upgrading

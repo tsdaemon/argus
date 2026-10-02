@@ -58,6 +58,7 @@ are base dependencies in `pyproject.toml`.
 | Server factory `create_app` and its lifespan | `src/argus/api/app.py` |
 | Docker visibility and restart tools | `src/argus/providers/docker_provider.py` |
 | Shell over SSH on named hosts, classified per command | `src/argus/providers/ssh_provider.py` |
+| Prometheus queries, metric discovery, targets, alerts (all READ) | `src/argus/providers/prometheus_provider.py` |
 | Per-call command risk classifiers (`jev`, `llm`, `ask`) and their factory | `src/argus/classifier/` |
 | Agent middleware storing per-call classifications for HITL | `src/argus/agent/classification.py` |
 | Break-glass provider; its Postgres repository | `src/argus/providers/breakglass_provider.py`, `src/argus/db/breakglass.py` |
@@ -216,6 +217,8 @@ the app without an admin repository get an open app on purpose.
   true (default false). It runs once when the app is created, exports in a background
   batch thread, and swallows setup errors, so a tracing failure must never break an agent run.
   Endpoint scheme picks the protocol: `http://host:6006/v1/traces` (HTTP) or `http://host:4317` (gRPC).
+  The deployed Phoenix requires a login (`PHOENIX_ENABLE_AUTH`); argus exports with its admin
+  secret as `PHOENIX_API_KEY`, which `phoenix.otel` sends as a bearer token. Local Phoenix stays open.
 - **Phoenix runs from a patched image** (`phoenix/`; full write-up in `docs/tracing.md`): stock Phoenix computes cost only from token
   counts and its own price table, which cannot match OpenRouter model ids, so the patch makes it
   use cost reported on a span (`llm.cost.*`) instead. Upstream request:
@@ -266,8 +269,9 @@ the app without an admin repository get an open app on purpose.
   `${ENV_VAR}`, that variable must exist (an empty value is allowed), or config loading fails.
 - `ARGUS_BREAKGLASS_SESSIONS_DIR` is read on the **target host** by the launcher script that
   autohome installs, and defaults to `~/.argus/breakglass-sessions`.
-- `examples/theseus.argus.yaml` is the deployed config; secrets and the router's SSH port
-  (`ARGUS_ROUTER_SSH_PORT`, also used by the dev config) come from the environment.
+- `examples/theseus.argus.yaml` is the deployed config; secrets, the router's SSH port
+  (`ARGUS_ROUTER_SSH_PORT`), and theseus's LAN IP (`THESEUS_IP`), both also used by the dev config, come
+  from `.env`.
 - `docker-compose.deploy.yml` and `.env.deploy` are deliberately gitignored local overlays;
   copy their `.example` templates and fill in actual deployment values when deploying.
   `task deploy` runs everything through `scripts/theseus-compose.sh`: the daemon is remote, so
