@@ -1428,3 +1428,35 @@ Corrected the token template to use the existing card, field-group, label, actio
 primary/deny buttons, and password-reveal classes. Explicit text input types select
 the shared input styling; removed inline secret styling. No new design system or CSS.
 Verified the rendered page in Chromium; the 375px mobile viewport has no horizontal overflow.
+
+### 2026-10-03 — Authenticated author identity for A2A messages
+
+The verified API token ID is now the sender identity and its name the display label.
+A2A execution supplies server-owned sender configuration to the graph; identity middleware
+adds it to the planner and worker system prompts. Browser runs identify the human operator.
+A2A HumanMessages checkpoint an author snapshot (kind, name, token ID, interface), which
+Argus converts to AG-UI metadata and retains in the existing message JSON through history
+updates and replay. No schema migration is needed. The chat reuses CopilotKit's user-message
+component with an Agent/name label; the stable token ID is available in its tooltip.
+Browser-supplied names and external author metadata are stripped. Historical messages that
+predate author recording are not attributed by guessing.
+
+Verification: 27 focused API/graph/history/policy tests passed, including identity in both
+models, history reload, and browser author spoofing rejection. Three Playwright checks passed
+(external author across reload and operator reply, ordinary chat/reload, attachments).
+TypeScript/Vite build, Ruff, and `git diff --check` passed. These checks use fake models and
+in-memory stores; real-model and real-Postgres checks were not run for this change.
+
+
+### 2026-10-03 — Separate operator and agent conversations
+
+Added All / Mine / Agents tabs to the conversation sidebar, agent-name labels on external
+threads, and a distinct background/left border for external messages. Thread source comes
+from the first user message's recorded author, so operator replies keep agent-origin threads
+in Agents. The history repository/API expose source and author and filter by source before
+pagination. Existing message JSON supplies the author; no migration is needed.
+
+Verification: 18 focused history/A2A API and repository tests passed, 6 real-Postgres
+contracts skipped because Postgres was unavailable. Postgres filter SQL compiled. Three
+Playwright checks passed (conversation tabs, external author/reload, mobile layout).
+TypeScript/Vite build passed; Ruff and diff whitespace checks passed.

@@ -319,6 +319,12 @@ Three real interfaces, all committed for v0, each with a distinct caller:
   Middleware on planner and worker refuses REQUIRE_APPROVAL/DENY calls without HITL;
   configured ALLOW overrides remain effective. Tokens cannot answer approvals or launch.
   Tokens grant access to shared agent knowledge, so callers must be trusted with it.
+  A verified token ID identifies the sender; its name is the display label. Server-owned
+  sender context reaches planner and worker system prompts. Each incoming A2A HumanMessage
+  stores an author snapshot in checkpoint additional_kwargs, converted to AG-UI metadata
+  and persisted with the existing message JSON. Replay and subsequent archive updates retain
+  that snapshot. The UI labels those messages as external agents; browser requests cannot
+  supply an external author identity.
   One task runs per context; concurrent work is rejected. Restart marks unfinished tasks
   failed. A subsequent message closes unanswered calls and starts a new turn without
   replaying unknown effects. Text inputs, task operations, and SSE status/final-answer

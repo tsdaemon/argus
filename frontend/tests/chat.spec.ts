@@ -163,3 +163,35 @@ test("a long conversation renders every message instead of virtualizing", async 
   await expect(page.locator("[data-message-id]").first()).toContainText("Question 1");
   await expect(page.locator("[data-testid=copilot-message-list] [data-index]")).toHaveCount(0);
 });
+
+
+test("external sender remains visible after reload and an operator reply", async ({ page, request }) => {
+  const seeded = await (await request.post("/__test__/external-message")).json();
+  await page.goto(`/?thread=${seeded.id}`);
+  await expect(page.locator(".message-author")).toHaveText("Agent hermes");
+  await expect(page.getByText("Check the storage pool", { exact: true })).toBeVisible();
+  await page.reload();
+  await expect(page.locator(".message-author")).toHaveText("Agent hermes");
+  await send(page, "Now check its logs");
+  await expect(page.getByText("Read-only review complete: Now check its logs", { exact: true })).toBeVisible();
+  await page.reload();
+  await expect(page.locator(".message-author")).toHaveCount(1);
+  await expect(page.locator(".message-author")).toHaveText("Agent hermes");
+});
+
+
+test("conversation tabs separate operator and agent threads", async ({ page, request }) => {
+  await request.post("/__test__/external-message");
+  await start(page);
+  await send(page, "My private diagnostics");
+  await expect(page.getByText("Read-only review complete: My private diagnostics", { exact: true })).toBeVisible();
+  await page.getByRole("tab", { name: "Agents", exact: true }).click();
+  await expect(page.getByRole("navigation").getByText("My private diagnostics", { exact: true })).toHaveCount(0);
+  await expect(page.getByRole("navigation").getByText("Agent · hermes").first()).toBeVisible();
+  await expect(page.locator(".external-message").first()).toBeVisible();
+  await page.getByRole("tab", { name: "Mine", exact: true }).click();
+  await expect(page.getByRole("navigation").getByText("My private diagnostics", { exact: true })).toBeVisible();
+  await expect(page.getByRole("navigation").getByText("Agent · hermes")).toHaveCount(0);
+  await page.getByRole("tab", { name: "All", exact: true }).click();
+  await expect(page.getByRole("navigation").getByText("Agent · hermes").first()).toBeVisible();
+});

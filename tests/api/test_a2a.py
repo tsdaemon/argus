@@ -39,7 +39,9 @@ async def a2a_app(tmp_path, monkeypatch):
         agent=AgentConfig(workspace_root=str(tmp_path)),
         a2a=A2AConfig(enabled=True, url="http://argus.test/a2a"),
     )
-    app = build_app(config, checkpointer, history, admin=InMemoryAdmin(), tokens=tokens, a2a=store)
+    admin = InMemoryAdmin()
+    app = build_app(config, checkpointer, history, admin=admin, tokens=tokens, a2a=store)
+    app.state.identity_admin = admin
     return app, tokens, store, history, first, secret, other, checkpointer
 
 
@@ -79,7 +81,12 @@ async def test_discovery_auth_and_revoke(a2a_app):
         # Test request without explicit A2A-Version header defaults to 1.0
         no_version_res = await client.post(
             "/a2a",
-            json={"jsonrpc": "2.0", "id": "req-no-version", "method": "SendMessage", "params": message()},
+            json={
+                "jsonrpc": "2.0",
+                "id": "req-no-version",
+                "method": "SendMessage",
+                "params": message(),
+            },
             headers={"Authorization": f"Bearer {secret}"},
         )
         assert no_version_res.status_code == 200
@@ -102,6 +109,13 @@ async def test_complete_history_context_continuation_and_task_isolation(a2a_app)
         thread_id = await store.thread(cid, first.id)
         archive = await history.chat_messages(thread_id)
         assert [m["role"] for m in archive] == ["user", "assistant"]
+        author = archive[0]["metadata"]["argus_author"]
+        assert author == {
+            "kind": "agent",
+            "name": "hermes",
+            "token_id": str(first.id),
+            "interface": "a2a",
+        }
         fetched = (await rpc(client, secret, "GetTask", {"id": tid})).json()
         assert fetched["result"]["id"] == tid
         for method in ("GetTask", "CancelTask", "SubscribeToTask"):
@@ -115,6 +129,31 @@ async def test_complete_history_context_continuation_and_task_isolation(a2a_app)
         assert another["result"]["task"]["contextId"] == cid
         assert another["result"]["task"]["id"] != tid
         assert len(await history.chat_messages(thread_id)) == 4
+        assert (await history.chat_messages(thread_id))[0]["metadata"]["argus_author"] == author
+        # Browser replay keeps the server-authenticated author after a reload.
+        from argus.webauth import SESSION_COOKIE, AdminAuth, sign_session
+
+        account, _ = await AdminAuth(app.state.identity_admin).get_or_create()
+        client.cookies.set(SESSION_COOKIE, sign_session(account.session_secret, account.username))
+        replay = await client.get(f"/api/threads/{thread_id}/connect")
+        snapshots = [
+            json.loads(line.removeprefix("data: "))
+            for line in replay.text.splitlines()
+            if line.startswith("data: ")
+        ]
+        snapshot = next(e for e in snapshots if e["type"] == "MESSAGES_SNAPSHOT")
+        assert snapshot["messages"][0]["metadata"]["argus_author"] == author
+        from tests.api.test_approvals import run_input
+
+        forged = run_input(str(thread_id))
+        forged["messages"][0].update({"name": "hermes", "metadata": {"argus_author": author}})
+        response = await client.post("/agent", json=forged)
+        assert response.status_code == 200
+        updated = await history.chat_messages(thread_id)
+        assert updated[0]["metadata"]["argus_author"] == author
+        newest = next(m for m in reversed(updated) if m["role"] == "user")
+        assert "argus_author" not in (newest.get("metadata") or {})
+        assert not newest.get("name")
 
 
 async def test_client_provided_context_id_creation_and_continuation(a2a_app):
@@ -122,7 +161,9 @@ async def test_client_provided_context_id_creation_and_continuation(a2a_app):
     custom_cid = "ctx-oc-argus"
     async with client_for(app) as client:
         # First message with a brand new client-provided contextId creates a new context
-        res1 = (await rpc(client, secret, params=message("First message", contextId=custom_cid))).json()
+        res1 = (
+            await rpc(client, secret, params=message("First message", contextId=custom_cid))
+        ).json()
         assert "result" in res1, res1
         task1 = res1["result"]["task"]
         assert task1["contextId"] == custom_cid
@@ -135,7 +176,9 @@ async def test_client_provided_context_id_creation_and_continuation(a2a_app):
         assert [m["role"] for m in messages] == ["user", "assistant"]
 
         # Subsequent message with the same contextId continues the thread
-        res2 = (await rpc(client, secret, params=message("Second message", contextId=custom_cid))).json()
+        res2 = (
+            await rpc(client, secret, params=message("Second message", contextId=custom_cid))
+        ).json()
         assert "result" in res2, res2
         task2 = res2["result"]["task"]
         assert task2["contextId"] == custom_cid
@@ -145,7 +188,9 @@ async def test_client_provided_context_id_creation_and_continuation(a2a_app):
         assert len(messages2) == 4
 
         # Another token cannot reuse or hijack the same contextId
-        other_res = (await rpc(client, other, params=message("Hijack attempt", contextId=custom_cid))).json()
+        other_res = (
+            await rpc(client, other, params=message("Hijack attempt", contextId=custom_cid))
+        ).json()
         assert "error" in other_res, other_res
 
 

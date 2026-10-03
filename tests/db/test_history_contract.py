@@ -74,3 +74,36 @@ async def test_delete_removes_only_that_thread(history):
     assert len(await history.chat_messages(kept)) == 1
     assert doomed not in [row["id"] for row in await history.list_threads(limit=500)]
     assert await history.delete_thread(doomed) is False
+
+
+async def test_filter_threads_by_original_sender_before_pagination(history):
+    human = await history.create_thread(title="Operator conversation")
+    external = await history.create_thread(title="External conversation")
+    author = {
+        "kind": "agent",
+        "name": "maintenance-bot",
+        "token_id": "identity",
+        "interface": "a2a",
+    }
+    await history.save_chat_messages(
+        external,
+        [
+            {
+                "id": "first-external",
+                "role": "user",
+                "content": "Inspect",
+                "metadata": {"argus_author": author},
+            },
+            {"id": "operator-reply", "role": "user", "content": "Continue"},
+        ],
+    )
+    assert (await history.get_thread(external))["author"] == author
+    assert (await history.get_thread(human))["source"] == "human"
+    agent_rows = await history.list_threads(source="agent", limit=100)
+    assert any(row["id"] == external for row in agent_rows)
+    assert not any(row["id"] == human for row in agent_rows)
+    human_rows = await history.list_threads(source="human", limit=100)
+    assert any(row["id"] == human for row in human_rows)
+    assert not any(row["id"] == external for row in human_rows)
+    first_page = await history.list_threads(source="agent", limit=1)
+    assert len(first_page) == 1 and first_page[0]["source"] == "agent"

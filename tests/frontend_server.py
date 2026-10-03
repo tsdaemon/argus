@@ -92,7 +92,19 @@ async def serve():
                 ),
             },
         )
-        app = build_app(config, InMemorySaver(), InMemoryHistory())
+        history = InMemoryHistory()
+        app = build_app(config, InMemorySaver(), history)
+
+        @app.post("/__test__/external-message")
+        async def external_message():
+            thread_id = await history.create_thread(title="External agent conversation")
+            await history.save_chat_messages(thread_id, [
+                {"id": "external-request", "role": "user", "content": "Check the storage pool",
+                 "metadata": {"argus_author": {"kind": "agent", "name": "hermes",
+                              "token_id": "test-token-id", "interface": "a2a"}}},
+                {"id": "external-response", "role": "assistant", "content": "Storage pool healthy"},
+            ])
+            return {"id": str(thread_id)}
 
         @app.get("/__test__/operations")
         async def observed_operations():

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from typing import Literal
 from uuid import UUID
 
 from ag_ui.core import (
@@ -17,6 +18,7 @@ from fastapi.responses import StreamingResponse
 
 from argus.agent.api import ArgusAgent
 from argus.agent.history import archive_messages
+from argus.agent.identity import AUTHOR_KEY
 from argus.db.history import HistoryRepository
 
 
@@ -32,6 +34,14 @@ def add_chat_routes(app: FastAPI, agent: ArgusAgent, history: HistoryRepository 
 
     @app.post("/agent")
     async def run(input_data: RunAgentInput, request: Request):
+        # Browser input belongs to the operator. Caller-supplied author labels are ignored.
+        for message in input_data.messages:
+            if message.role == "user":
+                message.name = None
+                if message.metadata:
+                    message.metadata = {
+                        k: v for k, v in message.metadata.items() if k != AUTHOR_KEY
+                    }
         thread_id = None
         if history is not None:
             try:
@@ -68,8 +78,12 @@ def add_chat_routes(app: FastAPI, agent: ArgusAgent, history: HistoryRepository 
         return StreamingResponse(events(), media_type=encoder.get_content_type())
 
     @app.get("/api/threads")
-    async def threads(limit: int = Query(100, ge=1, le=100), offset: int = Query(0, ge=0)):
-        return await require_history().list_threads(limit=limit, offset=offset)
+    async def threads(
+        limit: int = Query(100, ge=1, le=100),
+        offset: int = Query(0, ge=0),
+        source: Literal["human", "agent"] | None = None,
+    ):
+        return await require_history().list_threads(limit=limit, offset=offset, source=source)
 
     @app.post("/api/threads", status_code=201)
     async def new_thread():

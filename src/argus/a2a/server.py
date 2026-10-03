@@ -15,11 +15,11 @@ from a2a.server.routes.jsonrpc_routes import create_jsonrpc_routes
 from a2a.server.tasks.task_updater import TaskUpdater
 from a2a.types import a2a_pb2 as p
 from a2a.utils.errors import InvalidParamsError, TaskNotFoundError
-from ag_ui_langgraph.utils import langchain_messages_to_agui
 from fastapi import FastAPI
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
-from argus.agent.history import archive_messages
+from argus.agent.history import archive_messages, messages_to_agui
+from argus.agent.identity import AUTHOR_KEY
 from argus.db.a2a import A2ARepository, owner
 
 logger = logging.getLogger(__name__)
@@ -31,6 +31,8 @@ class TokenContextBuilder(ServerCallContextBuilder):
         return ServerCallContext(
             state={
                 "token_id": str(request.state.api_token.id),
+                "sender": {"kind": "agent", "name": request.state.api_token.name,
+                           "token_id": str(request.state.api_token.id), "interface": "a2a"},
                 "headers": {"a2a-version": request.headers.get("a2a-version") or "1.0"},
             }
         )
@@ -109,7 +111,8 @@ class ArgusExecutor(AgentExecutor):
         self.active.add(current)
         thread_id = await self.store.thread(context.context_id, owner(context.call_context))
         config = {
-            "configurable": {"thread_id": str(thread_id)},
+            "configurable": {"thread_id": str(thread_id),
+                             "argus_sender": context.call_context.state["sender"]},
             "recursion_limit": self.recursion_limit,
         }
         try:
@@ -141,6 +144,8 @@ class ArgusExecutor(AgentExecutor):
                         HumanMessage(
                             content=context.get_user_input(),
                             id=context.message.message_id or str(uuid4()),
+                            name="a2a_" + owner(context.call_context).hex,
+                            additional_kwargs={AUTHOR_KEY: context.call_context.state["sender"]},
                         ),
                     ]
                 },
@@ -150,7 +155,7 @@ class ArgusExecutor(AgentExecutor):
             ):
                 final = state
                 await archive_messages(
-                    self.history, thread_id, langchain_messages_to_agui(state.get("messages", []))
+                    self.history, thread_id, messages_to_agui(state.get("messages", []))
                 )
             if not final:
                 raise RuntimeError("Agent returned no state.")

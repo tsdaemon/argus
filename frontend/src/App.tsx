@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState, type ComponentProps } from "react";
 import {
-  CopilotKitProvider, CopilotChat, CopilotChatConfigurationProvider, CopilotChatMessageView,
+  CopilotKitProvider, CopilotChat, CopilotChatConfigurationProvider, CopilotChatMessageView, CopilotChatUserMessage,
   useAgent, useCopilotKit, useInterrupt,
 } from "@copilotkit/react-core/v2";
 import {
@@ -26,7 +26,17 @@ function MessageList({ messageElements, interruptElement, isRunning, messages }:
     {isRunning && messages.at(-1)?.role !== "reasoning" && <div className="cpk:mt-2"><CopilotChatMessageView.Cursor /></div>}
   </div>;
 }
-const messageView = { children: MessageList };
+function UserMessage(props: ComponentProps<typeof CopilotChatUserMessage>) {
+  const author = props.message.metadata?.argus_author;
+  const external = author?.kind === "agent";
+  return <div className={external ? "external-message" : undefined}>
+    {external && <div className="message-author" title={`A2A · ${author.token_id}`}>
+      <span className="message-author-badge">Agent</span> {author.name}
+    </div>}
+    <CopilotChatUserMessage {...props} />
+  </div>;
+}
+const messageView = { children: MessageList, userMessage: Object.assign(UserMessage, CopilotChatUserMessage) };
 
 function readCollapsed() {
   try { return localStorage.getItem(collapsedKey) === "1"; } catch { return false; }
@@ -123,6 +133,8 @@ function Conversation({ thread, onBusy, onFinished }: {
 }
 
 export default function App() {
+  const [source, setSource] = useState<"all" | "human" | "agent">("all");
+  const sourceQuery = source === "all" ? "" : `&source=${source}`;
   const [threads, setThreads] = useState<Thread[]>([]);
   const [active, setActive] = useState<Thread | null>(null);
   const [loading, setLoading] = useState(true);
@@ -143,12 +155,12 @@ export default function App() {
 
   const refresh = useCallback(async () => {
     try {
-      const rows = await api<Thread[]>(`/api/threads?limit=${pageSize}`);
+      const rows = await api<Thread[]>(`/api/threads?limit=${pageSize}${sourceQuery}`);
       setThreads((previous) => [...rows, ...previous.filter((old) => !rows.some((r) => r.id === old.id))]);
       setHasMore(rows.length === pageSize);
       setActive((current) => rows.find((r) => r.id === current?.id) ?? current);
     } catch (e) { setError(String(e)); }
-  }, []);
+  }, [sourceQuery]);
   const onFinished = useCallback(() => { void refresh(); }, [refresh]);
 
   function select(thread: Thread) {
@@ -163,7 +175,7 @@ export default function App() {
     setLoading(true); setError("");
     try {
       const [rows, config] = await Promise.all([
-        api<Thread[]>(`/api/threads?limit=${pageSize}`),
+        api<Thread[]>(`/api/threads?limit=${pageSize}${sourceQuery}`),
         api<{ launch_enabled: boolean; auth_enabled: boolean }>("/api/ui-config"),
       ]);
       setThreads(rows); setHasMore(rows.length === pageSize); setLaunch(config.launch_enabled); setAuthEnabled(config.auth_enabled);
@@ -203,14 +215,29 @@ export default function App() {
     setCreating(true); setError("");
     try {
       const thread = await api<Thread>("/api/threads", { method: "POST" });
-      setThreads((rows) => [thread, ...rows]); select(thread);
+      setSource("all"); setThreads((rows) => [thread, ...rows]); select(thread);
     } catch (e) { setError(String(e)); }
     finally { setCreating(false); }
   }
 
+  async function changeSource(next: "all" | "human" | "agent") {
+    if (busy || loading) return;
+    setSource(next); setLoading(true); setError("");
+    try {
+      const query = next === "all" ? "" : `&source=${next}`;
+      const rows = await api<Thread[]>(`/api/threads?limit=${pageSize}${query}`);
+      setThreads(rows); setHasMore(rows.length === pageSize);
+      setActive(null);
+      const url = new URL(location.href); url.searchParams.delete("thread");
+      history.replaceState(null, "", url);
+      if (rows.length) select(rows[0]);
+    } catch (e) { setError(String(e)); }
+    finally { setLoading(false); }
+  }
+
   async function more() {
     try {
-      const rows = await api<Thread[]>(`/api/threads?limit=${pageSize}&offset=${threads.length}`);
+      const rows = await api<Thread[]>(`/api/threads?limit=${pageSize}&offset=${threads.length}${sourceQuery}`);
       setThreads((current) => [...current, ...rows.filter((r) => !current.some((c) => c.id === r.id))]);
       setHasMore(rows.length === pageSize);
     } catch (e) { setError(String(e)); }
@@ -233,6 +260,11 @@ export default function App() {
         aria-label={collapsed ? "New conversation" : undefined} data-tooltip={collapsed ? "New conversation" : undefined}>
         <span aria-hidden="true">＋</span> <span className="label">{creating ? "Creating…" : "New conversation"}</span>
       </button>
+      <div className="conversation-tabs" role="tablist" aria-label="Conversation source">
+        {([ ["all", "All"], ["human", "Mine"], ["agent", "Agents"] ] as const).map(([value, label]) =>
+          <button key={value} role="tab" aria-selected={source === value} disabled={busy || loading}
+            onClick={() => void changeSource(value)}>{label}</button>)}
+      </div>
       <div className="sidebar-heading">CONVERSATIONS</div>
       <nav className="thread-list">
         {threads.map((thread) => <div key={thread.id} className="thread-row">
@@ -245,6 +277,7 @@ export default function App() {
               aria-current={active?.id === thread.id ? "page" : undefined}
               onClick={() => select(thread)}>
               <span>{thread.title || "New conversation"}</span>
+              {thread.source === "agent" && <small className="thread-author">Agent · {thread.author?.name || "External agent"}</small>}
               <time dateTime={thread.updated_at}>{new Date(thread.updated_at).toLocaleDateString(undefined, {
                 month: "short", day: "numeric",
               })}</time>

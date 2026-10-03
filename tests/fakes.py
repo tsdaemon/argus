@@ -42,15 +42,32 @@ class InMemoryHistory:
         thread["updated_at"] = datetime.now(UTC)
         thread["title"] = thread["title"] or title
 
-    async def list_threads(self, *, limit: int = 100, offset: int = 0) -> list[dict]:
+    async def list_threads(
+        self, *, limit: int = 100, offset: int = 0, source: str | None = None
+    ) -> list[dict]:
         rows = sorted(
             self._threads.values(), key=lambda t: (t["updated_at"], t["id"]), reverse=True
         )
-        return [dict(row) for row in rows[offset : offset + limit]]
+        rows = [self._with_author(row) for row in rows]
+        if source is not None:
+            rows = [row for row in rows if row["source"] == source]
+        return rows[offset : offset + limit]
 
     async def get_thread(self, thread_id: uuid.UUID) -> dict | None:
         thread = self._threads.get(thread_id)
-        return dict(thread) if thread else None
+        return self._with_author(thread) if thread else None
+
+    def _with_author(self, thread):
+        first = next(
+            (m for m in self._messages.get(thread["id"], {}).values() if m["role"] == "user"), {}
+        )
+        author = (first.get("metadata") or {}).get("argus_author")
+        external = bool(author and author.get("kind") == "agent")
+        return {
+            **thread,
+            "source": "agent" if external else "human",
+            "author": author if external else None,
+        }
 
     async def delete_thread(self, thread_id: uuid.UUID) -> bool:
         self._messages.pop(thread_id, None)
@@ -128,7 +145,6 @@ class InMemoryAdmin:
         return True
 
 
-
 # Repository fake used by API tests and the shared repository contract suite.
 class InMemoryTokens:
     def __init__(self):
@@ -151,7 +167,6 @@ class InMemoryTokens:
 
     async def used(self, token_id: UUID) -> None:
         self.tokens[token_id] = replace(self.tokens[token_id], last_used_at=now())
-
 
 
 class InMemoryA2A(TaskStore):

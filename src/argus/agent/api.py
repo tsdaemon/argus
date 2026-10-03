@@ -21,13 +21,13 @@ from ag_ui.core import (
     RunStartedEvent,
 )
 from ag_ui_langgraph import LangGraphAgent
-from ag_ui_langgraph.utils import langchain_messages_to_agui
 from langchain_core.messages import AIMessage, ToolMessage
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.types import Command
 
 from argus.agent.classification import METADATA_KEY, stored_classification
 from argus.agent.graph import build_graph
+from argus.agent.history import messages_to_agui
 from argus.agent.tools import external_name
 from argus.config import AgentConfig
 from argus.policy import PolicyEngine, ToolClass
@@ -96,7 +96,7 @@ class ArgusAgent(LangGraphAgent):
         state = await self.graph.aget_state({"configurable": {"thread_id": thread_id}})
         messages = self._filter_orphan_tool_messages((state.values or {}).get("messages", []))
         return (
-            langchain_messages_to_agui(messages),
+            messages_to_agui(messages),
             self._interrupts_to_agui(self._collect_interrupts(state.tasks)),
         )
 

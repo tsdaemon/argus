@@ -10,7 +10,7 @@ from __future__ import annotations
 import uuid
 from typing import Any, Protocol
 
-from sqlalchemy import func, select, update
+from sqlalchemy import case, func, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async_engine
 
@@ -23,7 +23,9 @@ class HistoryRepository(Protocol):
     async def touch_thread(self, thread_id: uuid.UUID, title: str | None) -> None:
         """Index a conversation, bumping `updated_at`; keep the first title it got."""
 
-    async def list_threads(self, *, limit: int = 100, offset: int = 0) -> list[dict]: ...
+    async def list_threads(
+        self, *, limit: int = 100, offset: int = 0, source: str | None = None
+    ) -> list[dict]: ...
 
     async def get_thread(self, thread_id: uuid.UUID) -> dict | None: ...
 
@@ -42,12 +44,14 @@ def make_engine(database_url: str) -> AsyncEngine:
     return create_async_engine(database_url.replace("postgresql://", "postgresql+psycopg://"))
 
 
-def _thread_row(thread: Thread) -> dict:
+def _thread_row(thread: Thread, author: dict | None = None) -> dict:
     return {
         "id": thread.id,
         "title": thread.title,
         "created_at": thread.created_at,
         "updated_at": thread.updated_at,
+        "source": "agent" if author and author.get("kind") == "agent" else "human",
+        "author": author if author and author.get("kind") == "agent" else None,
     }
 
 
@@ -73,20 +77,37 @@ class SqlHistory:
         async with self._session.begin() as session:
             await session.execute(statement)
 
-    async def list_threads(self, *, limit: int = 100, offset: int = 0) -> list[dict]:
+    def _author(self):
+        # Origin is the first user turn, so an operator reply does not move an agent thread.
+        return (
+            select(Message.content["metadata"]["argus_author"])
+            .where(Message.thread_id == Thread.id, Message.role == "user")
+            .order_by(Message.chat_order)
+            .limit(1)
+            .correlate(Thread)
+            .scalar_subquery()
+        )
+
+    async def list_threads(
+        self, *, limit: int = 100, offset: int = 0, source: str | None = None
+    ) -> list[dict]:
+        author = self._author()
+        query = select(Thread, author.label("author"))
+        if source is not None:
+            origin = case((author["kind"].astext == "agent", "agent"), else_="human")
+            query = query.where(origin == source)
         query = (
-            select(Thread)
-            .order_by(Thread.updated_at.desc(), Thread.id.desc())
-            .limit(limit)
-            .offset(offset)
+            query.order_by(Thread.updated_at.desc(), Thread.id.desc()).limit(limit).offset(offset)
         )
         async with self._session() as session:
-            return [_thread_row(t) for t in await session.scalars(query)]
+            return [_thread_row(thread, sender) for thread, sender in await session.execute(query)]
 
     async def get_thread(self, thread_id: uuid.UUID) -> dict | None:
         async with self._session() as session:
-            thread = await session.get(Thread, thread_id)
-            return _thread_row(thread) if thread else None
+            row = (
+                await session.execute(select(Thread, self._author()).where(Thread.id == thread_id))
+            ).first()
+            return _thread_row(*row) if row else None
 
     async def delete_thread(self, thread_id: uuid.UUID) -> bool:
         # The relationships use passive_deletes, so this issues one DELETE and the

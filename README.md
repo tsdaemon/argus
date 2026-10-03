@@ -241,7 +241,10 @@ Run `task backend:migrate` locally before restarting the server (the deployment 
 migrates on startup). Log in and open **API tokens** in the sidebar, or visit
 `/settings/tokens`. Create a named token, optionally with an expiry, and copy its secret
 once into the calling agent's secret configuration. Argus stores only its hash; the same
-page lists usage and revokes tokens. Revocation blocks subsequent requests, without
+page lists usage and revokes tokens. The token ID is the caller's stable identity and its
+name is the author label. Argus gives the verified sender to both planner and worker;
+external messages appear as **Agent · token name** in chat history, including after reload.
+Revocation blocks subsequent requests, without
 cancelling work already accepted.
 
 Discovery is `GET /.well-known/agent-card.json`; execution is JSON-RPC at `POST /a2a`, using
