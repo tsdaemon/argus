@@ -13,6 +13,7 @@ from a2a.utils.task import decode_page_token, encode_page_token
 from google.protobuf.json_format import MessageToDict, ParseDict
 from sqlalchemy import delete, select, update
 from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 
 from argus.db.models import A2AContextRow, A2ATaskRow
@@ -21,6 +22,9 @@ from argus.db.models import A2AContextRow, A2ATaskRow
 class A2ARepository(Protocol):
     async def create_context(self, context_id: str, owner: UUID, thread_id: UUID) -> None: ...
     async def thread(self, context_id: str, owner: UUID) -> UUID | None: ...
+    async def rotate_context(
+        self, context_id: str, owner: UUID, old_thread: UUID, new_thread: UUID
+    ) -> bool: ...
     async def save(self, task: Task, context: ServerCallContext) -> None: ...
     async def get(self, task_id: str, context: ServerCallContext) -> Task | None: ...
     async def list(
@@ -84,8 +88,28 @@ class SqlA2A(TaskStore):
         self._session = async_sessionmaker(engine, expire_on_commit=False)
 
     async def create_context(self, context_id: str, owner: UUID, thread_id: UUID) -> None:
+        try:
+            async with self._session.begin() as session:
+                session.add(A2AContextRow(id=context_id, token_id=owner, thread_id=thread_id))
+        except IntegrityError:
+            # context_id is globally unique; never surface the DB error to the caller.
+            raise InvalidParamsError(message="Context ID is unavailable.") from None
+
+    async def rotate_context(
+        self, context_id: str, owner: UUID, old_thread: UUID, new_thread: UUID
+    ) -> bool:
+        """Point the context at new_thread iff it still points at old_thread (atomic)."""
         async with self._session.begin() as session:
-            session.add(A2AContextRow(id=context_id, token_id=owner, thread_id=thread_id))
+            result = await session.execute(
+                update(A2AContextRow)
+                .where(
+                    A2AContextRow.id == context_id,
+                    A2AContextRow.token_id == owner,
+                    A2AContextRow.thread_id == old_thread,
+                )
+                .values(thread_id=new_thread)
+            )
+            return result.rowcount == 1
 
     async def thread(self, context_id: str, owner: UUID) -> UUID | None:
         async with self._session() as session:

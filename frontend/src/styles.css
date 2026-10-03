@@ -145,9 +145,9 @@ main { flex: 1; min-width: 0; display: flex; flex-direction: column; background:
 }
 
 .message-author { display: flex; align-items: center; justify-content: flex-end; gap: 0.5rem;
-  margin: 0.75rem 0 0.25rem; color: var(--ag-muted); font-size: 0.8rem; }
-.message-author-badge { border: 1px solid var(--line); border-radius: 999px;
-  padding: 0.1rem 0.5rem; color: var(--accent-light); }
+  margin: 0 0 6px; color: var(--ag-muted); font-size: 12px; }
+.message-author-badge { color: var(--accent-light); font-size: 10px;
+  text-transform: uppercase; letter-spacing: 0.08em; }
 
 .conversation-tabs { display: flex; gap: 4px; margin: 0 0 18px; padding: 3px;
   border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
@@ -155,9 +155,12 @@ main { flex: 1; min-width: 0; display: flex; flex-direction: column; background:
   background: transparent; color: var(--ag-muted); font-size: 12px; }
 .conversation-tabs button[aria-selected=true] { background: var(--raised); color: var(--cream); }
 .thread-author { display: block; margin-top: 4px; font-size: 10px; color: var(--accent-light); }
-.external-message { padding: 10px 14px; border-left: 2px solid var(--ag-accent);
-  border-radius: 8px; background: #0f1822; }
-.external-message .message-author { justify-content: flex-start; margin-top: 0; }
+.external-message { min-width: 0; }
+.external-message .message-author { color: #b6a4c9; }
+.external-message .message-author-badge { color: #c4a1e5; }
+.external-message [data-testid="copilot-user-message"] { padding-top: 0; background: transparent; }
+.argus-chat .external-message [data-message-id] .cpk\:bg-muted {
+  background: #261d35; border-color: #57416f; }
 .sidebar[data-collapsed] .conversation-tabs { display: none; }
 @media (max-width: 700px) {
   .conversation-tabs { margin: 0; grid-column: 1 / -1; }

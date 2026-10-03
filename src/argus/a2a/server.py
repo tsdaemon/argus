@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 from a2a.server.agent_execution import AgentExecutor, RequestContext, SimpleRequestContextBuilder
@@ -39,10 +40,32 @@ class TokenContextBuilder(ServerCallContextBuilder):
 
 
 class OwnedContextBuilder(SimpleRequestContextBuilder):
-    def __init__(self, store: A2ARepository, history):
+    def __init__(self, store: A2ARepository, history, idle_window=timedelta(hours=24), clock=None):
         super().__init__(task_store=store)
         self.store = store
         self.history = history
+        self.idle_window = idle_window
+        self.clock = clock or (lambda: datetime.now(UTC))
+
+    async def _rotate_if_idle(self, context_id: str, owner_id) -> None:
+        """Move a stale client-chosen context to a fresh thread; the old thread is untouched."""
+        thread_id = await self.store.thread(context_id, owner_id)
+        if thread_id is None:
+            return
+        thread = await self.history.get_thread(thread_id)
+        # Clock note: `updated_at` is stamped by the database (func.now()) while self.clock is
+        # the application's; against a 24h window, host/DB skew is negligible.
+        if thread is not None and self.clock() - thread["updated_at"] <= self.idle_window:
+            return
+        new_thread = await self.history.create_thread()
+        try:
+            # Compare-and-set: of concurrent requests only one rotates; the rest use its thread.
+            rotated = await self.store.rotate_context(context_id, owner_id, thread_id, new_thread)
+        except BaseException:
+            await self.history.delete_thread(new_thread)
+            raise
+        if not rotated:
+            await self.history.delete_thread(new_thread)
 
     async def build(self, context, params=None, task_id=None, context_id=None, task=None):
         existing = await self.store.get(task_id, context) if task_id else None
@@ -50,6 +73,13 @@ class OwnedContextBuilder(SimpleRequestContextBuilder):
             if context_id and context_id != existing.context_id:
                 raise InvalidParamsError(message="Context does not match task.")
             context_id = existing.context_id
+            if params:
+                # Argus tasks are single-turn and never enter an interrupted state. A taskId
+                # continuation would run in the context's *current* thread, which differs from
+                # the task's after an idle rotation, so it is refused outright.
+                raise InvalidParamsError(
+                    message="Tasks cannot be continued; send a new message in the same context."
+                )
         if params:
             if params.message.role != p.Role.ROLE_USER or not params.message.parts:
                 raise InvalidParamsError(message="Send a user message with text parts.")
@@ -59,10 +89,16 @@ class OwnedContextBuilder(SimpleRequestContextBuilder):
                 raise InvalidParamsError(message="Message must contain text.")
             if params.metadata or params.message.metadata:
                 raise InvalidParamsError(message="Caller execution metadata is not supported.")
+        if params and not task_id and context_id:
+            await self._rotate_if_idle(context_id, owner(context))
         result = await super().build(context, params, task_id, context_id, task)
         if result.context_id and await self.store.thread(result.context_id, owner(context)) is None:
             thread_id = await self.history.create_thread()
-            await self.store.create_context(result.context_id, owner(context), thread_id)
+            try:
+                await self.store.create_context(result.context_id, owner(context), thread_id)
+            except BaseException:
+                await self.history.delete_thread(thread_id)
+                raise
         return result
 
 
@@ -219,7 +255,8 @@ def add_a2a_routes(app: FastAPI, graph, store, history, config, recursion_limit)
     )
     executor = ArgusExecutor(graph, store, history, recursion_limit)
     handler = OwnedRequestHandler(
-        executor, store, card, request_context_builder=OwnedContextBuilder(store, history)
+        executor, store, card, request_context_builder=OwnedContextBuilder(
+            store, history, timedelta(seconds=config.thread_idle_window_seconds))
     )
     app.router.routes.extend(create_jsonrpc_routes(handler, "/a2a", TokenContextBuilder()))
 

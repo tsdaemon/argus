@@ -94,3 +94,34 @@ async def test_restart_recovery_only_changes_unfinished_tasks(stores):
     await tasks.recover()
     assert (await tasks.get(working.id, ctx)).status.state == p.TaskState.TASK_STATE_FAILED
     assert (await tasks.get(complete.id, ctx)).status.state == p.TaskState.TASK_STATE_COMPLETED
+
+
+async def test_rotate_context_is_owned_compare_and_set(stores):
+    tokens, tasks, history = stores
+    first, _ = await TokenAuth(tokens).issue("first")
+    second, _ = await TokenAuth(tokens).issue("second")
+    cid = str(uuid4())
+    old = await history.create_thread()
+    new = await history.create_thread()
+    other_thread = await history.create_thread()
+    await tasks.create_context(cid, first.id, old)
+    # Wrong owner: refused, row unchanged.
+    assert not await tasks.rotate_context(cid, second.id, old, new)
+    assert await tasks.thread(cid, first.id) == old
+    # Success.
+    assert await tasks.rotate_context(cid, first.id, old, new)
+    assert await tasks.thread(cid, first.id) == new
+    # Stale old_thread: refused, row unchanged.
+    assert not await tasks.rotate_context(cid, first.id, old, other_thread)
+    assert await tasks.thread(cid, first.id) == new
+
+
+async def test_create_context_conflict_is_invalid_params(stores):
+    tokens, tasks, history = stores
+    first, _ = await TokenAuth(tokens).issue("first")
+    second, _ = await TokenAuth(tokens).issue("second")
+    cid = str(uuid4())
+    await tasks.create_context(cid, first.id, await history.create_thread())
+    with pytest.raises(InvalidParamsError):
+        await tasks.create_context(cid, second.id, await history.create_thread())
+    assert await tasks.thread(cid, second.id) is None

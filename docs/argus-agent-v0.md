@@ -1496,3 +1496,20 @@ On theseus, the first `deploy:backfill-costs` right after `task deploy` failed w
 `ConnectError`: Phoenix was still starting. A rerun once it served `/healthz` updated 4
 threads, +$0.4824 in total, so the query and its auth work against the production Phoenix.
 Not yet run: a real OpenRouter call through the recorder.
+
+
+### 2026-10-03 — Simplify external-message presentation
+
+Removed the nested external-message card, its border/left stripe, and the pill-shaped Agent
+badge. Sender is now a small label aligned with the message above a single bubble; external
+bubbles retain a subtle color distinction. Removed the inner component's background and
+extra top padding so the sender and message no longer sit inside separate rectangles.
+Verification: frontend TypeScript/Vite build, the external sender reload/operator-reply
+Playwright check, and `git diff --check` passed.
+
+
+### 2026-10-03 — Distinct color for external messages
+
+Changed agent message bubbles to muted purple with a matching border and sender label,
+visibly separating them from blue operator bubbles. CSS-only change.
+Verification: frontend TypeScript/Vite build and `git diff --check` passed.

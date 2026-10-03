@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import secrets
 import uuid
 from dataclasses import replace
@@ -184,8 +185,17 @@ class InMemoryA2A(TaskStore):
 
     async def create_context(self, context_id, owner, thread_id):
         if context_id in self.contexts:
-            raise ValueError("Context exists.")
+            raise InvalidParamsError(message="Context ID is unavailable.")
         self.contexts[context_id] = (owner, thread_id)
+
+    async def rotate_context(self, context_id, owner, old_thread, new_thread):
+        if self.contexts.get(context_id) != (owner, old_thread):
+            return False
+        await asyncio.sleep(0)  # interleaving point: a non-atomic CAS would let two rotate
+        if self.contexts.get(context_id) != (owner, old_thread):
+            return False
+        self.contexts[context_id] = (owner, new_thread)
+        return True
 
     async def thread(self, context_id, owner):
         entry = self.contexts.get(context_id)

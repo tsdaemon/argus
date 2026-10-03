@@ -264,3 +264,74 @@ async def test_active_task_cancellation_and_context_concurrency(a2a_app, monkeyp
         cancelled = (await rpc(client, secret, "CancelTask", {"id": task["id"]})).json()
         assert cancelled["result"]["status"]["state"] == "TASK_STATE_CANCELED", cancelled
         gate.set()
+
+
+async def test_idle_window_rotates_fixed_context_to_new_thread(a2a_app):
+    from datetime import UTC, datetime, timedelta
+
+    app, _, store, history, first, secret, other, _ = a2a_app
+    fixed = "ctx-oc-argus"
+
+    async def send(text, token=secret, **kw):
+        res = (await rpc(client, token, params=message(text, **kw))).json()
+        return res["result"]["task"]
+
+    async with client_for(app) as client:
+        t1 = await send("First", contextId=fixed)
+        th1 = await store.thread(fixed, first.id)
+        # Within the window the same thread continues.
+        await send("Second", contextId=fixed)
+        assert await store.thread(fixed, first.id) == th1
+        assert len(await history.chat_messages(th1)) == 4
+        # Another token cannot see or continue it.
+        threads_before = len(history._threads)
+        foreign = (await rpc(client, other, params=message(contextId=fixed))).json()
+        assert foreign["error"]["code"] == -32602, foreign  # InvalidParams, no raw DB text
+        assert "exists" not in foreign["error"]["message"].lower()
+        assert len(history._threads) == threads_before  # orphan thread was cleaned up
+        assert await store.thread(fixed, first.id) == th1
+        assert len(await history.chat_messages(th1)) == 4
+        # Idle for more than 24h: a new thread; the old one is untouched.
+        stale = datetime.now(UTC) - timedelta(hours=25)
+        history._threads[th1]["updated_at"] = stale
+        t3 = await send("Third", contextId=fixed)
+        th3 = await store.thread(fixed, first.id)
+        assert th3 != th1 and t3["contextId"] == fixed
+        assert len(await history.chat_messages(th1)) == 4
+        assert history._threads[th1]["updated_at"] == stale
+        assert history._threads[th3]["title"] == "Third"
+        # The next message goes to the new thread.
+        await send("Fourth", contextId=fixed)
+        assert await store.thread(fixed, first.id) == th3
+        assert len(await history.chat_messages(th3)) == 4
+        # taskId continuation is refused and runs nothing in either thread.
+        cont = (await rpc(client, secret, params=message("More", taskId=t1["id"],
+                                                          contextId=fixed))).json()
+        assert cont["error"]["code"] == -32602, cont
+        assert await store.thread(fixed, first.id) == th3
+        assert len(await history.chat_messages(th1)) == 4
+        assert len(await history.chat_messages(th3)) == 4
+        # Empty contextId: server-generated context and thread.
+        fresh = await send("Fresh")
+        assert fresh["contextId"] not in ("", fixed)
+        assert await store.thread(fresh["contextId"], first.id) not in (th1, th3)
+
+
+async def test_concurrent_rotation_uses_single_thread(a2a_app):
+    import asyncio
+    from datetime import UTC, datetime, timedelta
+
+    app, _, store, history, first, secret, _, _ = a2a_app
+    async with client_for(app) as client:
+        await rpc(client, secret, params=message("x", contextId="c"))
+        old = await store.thread("c", first.id)
+        history._threads[old]["updated_at"] = datetime.now(UTC) - timedelta(hours=30)
+        before = len(history._threads)
+        await asyncio.gather(*(
+            rpc(client, secret, params=message("y", contextId="c")) for _ in range(3)
+        ))
+        assert len(history._threads) == before + 1  # losers' spare threads were deleted
+        new = await store.thread("c", first.id)
+        assert new != old
+        # Exactly one CAS won: the old thread was replaced once and nothing points back to it.
+        assert not await store.rotate_context("c", first.id, old, uuid4())
