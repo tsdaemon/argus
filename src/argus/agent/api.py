@@ -26,6 +26,7 @@ from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.types import Command
 
 from argus.agent.classification import METADATA_KEY, stored_classification
+from argus.agent.cost import CostRecorder
 from argus.agent.graph import build_graph
 from argus.agent.history import messages_to_agui
 from argus.agent.tools import external_name
@@ -191,6 +192,7 @@ def build_agent(
     provider_settings: dict[str, dict[str, Any]],
     policy: PolicyEngine,
     checkpointer: BaseCheckpointSaver,
+    cost_recorder: CostRecorder | None = None,
 ) -> ArgusAgent:
     graph = build_graph(
         config=config,
@@ -198,6 +200,7 @@ def build_agent(
         provider_settings=provider_settings,
         policy=policy,
         checkpointer=checkpointer,
+        cost_recorder=cost_recorder,
     )
     agent = ArgusAgent(
         name="argus-agent",

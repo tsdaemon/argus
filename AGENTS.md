@@ -64,6 +64,7 @@ are base dependencies in `pyproject.toml`.
 | Break-glass provider; its Postgres repository | `src/argus/providers/breakglass_provider.py`, `src/argus/db/breakglass.py` |
 | Break-glass web routes + shared admin authentication | `src/argus/mcp/webapp.py`, `src/argus/webauth.py` |
 | argus's own HTML pages (login, break-glass): Jinja templates on one base | `src/argus/webpages.py`, `src/argus/templates/` |
+| Per-thread model spend (callback on the chat models); Phoenix backfill | `src/argus/agent/cost.py`, `src/argus/agent/phoenix_costs.py` |
 | ntfy push notifications | `src/argus/notify/` |
 | SSH launcher (named hosts); the host-side script lives in autohome | `src/argus/launcher/ssh.py` |
 
@@ -219,6 +220,9 @@ the app without an admin repository get an open app on purpose.
   Endpoint scheme picks the protocol: `http://host:6006/v1/traces` (HTTP) or `http://host:4317` (gRPC).
   The deployed Phoenix requires a login (`PHOENIX_ENABLE_AUTH`); argus exports with its admin
   secret as `PHOENIX_API_KEY`, which `phoenix.otel` sends as a bearer token. Local Phoenix stays open.
+- **argus counts spend itself; Phoenix is not the source.** `CostRecorder` adds each call's
+  OpenRouter `usage.cost` to `threads.cost_usd`, so the UI shows spend with tracing off.
+  `python -m argus.agent.phoenix_costs` only backfills threads from before it existed.
 - **Phoenix runs from a patched image** (`phoenix/`; full write-up in `docs/tracing.md`): stock Phoenix computes cost only from token
   counts and its own price table, which cannot match OpenRouter model ids, so the patch makes it
   use cost reported on a span (`llm.cost.*`) instead. Upstream request:

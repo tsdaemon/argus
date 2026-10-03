@@ -85,6 +85,10 @@ def add_chat_routes(app: FastAPI, agent: ArgusAgent, history: HistoryRepository 
     ):
         return await require_history().list_threads(limit=limit, offset=offset, source=source)
 
+    @app.get("/api/costs")
+    async def costs():
+        return {"total_usd": await require_history().total_cost()}
+
     @app.post("/api/threads", status_code=201)
     async def new_thread():
         store = require_history()

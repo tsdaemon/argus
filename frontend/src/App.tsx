@@ -4,7 +4,7 @@ import {
   useAgent, useCopilotKit, useInterrupt,
 } from "@copilotkit/react-core/v2";
 import {
-  api, ArgusHttpAgent, attachmentAccept, attachmentMaxSize, deleteThread, resumeProp, type RunState, type Thread,
+  api, ArgusHttpAgent, attachmentAccept, attachmentMaxSize, deleteThread, formatUsd, resumeProp, type RunState, type Thread,
 } from "./agent";
 import { Approvals } from "./Approvals";
 import { summarize, ToolCallCard } from "./ToolCall";
@@ -146,6 +146,10 @@ export default function App() {
   const [hasMore, setHasMore] = useState(false);
   const [collapsed, setCollapsed] = useState(readCollapsed);
   const [confirming, setConfirming] = useState<string | null>(null);
+  const [spent, setSpent] = useState<number | null>(null);
+  const loadSpent = useCallback(() => {
+    api<{ total_usd: number }>("/api/costs").then((c) => setSpent(c.total_usd), () => setSpent(null));
+  }, []);
 
   function toggleSidebar() {
     const next = !collapsed;
@@ -159,8 +163,9 @@ export default function App() {
       setThreads((previous) => [...rows, ...previous.filter((old) => !rows.some((r) => r.id === old.id))]);
       setHasMore(rows.length === pageSize);
       setActive((current) => rows.find((r) => r.id === current?.id) ?? current);
+      loadSpent();
     } catch (e) { setError(String(e)); }
-  }, [sourceQuery]);
+  }, [sourceQuery, loadSpent]);
   const onFinished = useCallback(() => { void refresh(); }, [refresh]);
 
   function select(thread: Thread) {
@@ -179,6 +184,7 @@ export default function App() {
         api<{ launch_enabled: boolean; auth_enabled: boolean }>("/api/ui-config"),
       ]);
       setThreads(rows); setHasMore(rows.length === pageSize); setLaunch(config.launch_enabled); setAuthEnabled(config.auth_enabled);
+      loadSpent();
       const wanted = new URL(location.href).searchParams.get("thread");
       // The selected thread can be older than the first page.
       if (wanted && /^[0-9a-f-]{36}$/i.test(wanted)) {
@@ -278,9 +284,12 @@ export default function App() {
               onClick={() => select(thread)}>
               <span>{thread.title || "New conversation"}</span>
               {thread.source === "agent" && <small className="thread-author">Agent · {thread.author?.name || "External agent"}</small>}
-              <time dateTime={thread.updated_at}>{new Date(thread.updated_at).toLocaleDateString(undefined, {
-                month: "short", day: "numeric",
-              })}</time>
+              <div className="thread-meta">
+                <time dateTime={thread.updated_at}>{new Date(thread.updated_at).toLocaleDateString(undefined, {
+                  month: "short", day: "numeric",
+                })}</time>
+                {thread.cost_usd > 0 && <small className="thread-cost" title="Model spend">{formatUsd(thread.cost_usd)}</small>}
+              </div>
             </button>
             <button className="thread-delete" disabled={busy} aria-label="Delete conversation"
               data-tooltip="Delete conversation" onClick={() => setConfirming(thread.id)}>
@@ -297,6 +306,8 @@ export default function App() {
       <div className="sidebar-footer">
         <span className="status-dot" data-busy={busy || undefined} />
         <span className="label" role="status">{busy ? "Working…" : "Ready"}</span>
+        {spent !== null && <span className="label spent" title="Model spend across all conversations">
+          {formatUsd(spent)} spent</span>}
         {launch && <a className="label" href="/launch" target="_blank" rel="noreferrer">Open privileged session ↗</a>}
         {authEnabled && <a className="label" href="/settings/tokens">API tokens</a>}
         {authEnabled && <form method="post" action="/logout"><button className="link" type="submit">Log out</button></form>}

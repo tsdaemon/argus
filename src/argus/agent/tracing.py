@@ -7,20 +7,13 @@ are exported from a background thread, so an unreachable collector cannot fail o
 from __future__ import annotations
 
 import logging
-import math
 from collections.abc import Mapping
 from typing import Any
 
+from argus.agent.cost import cost_in
 from argus.config import OtelConfig
 
 logger = logging.getLogger(__name__)
-
-
-def _cost_in(usage: Any) -> float | None:
-    cost = usage.get("cost") if isinstance(usage, Mapping) else None
-    if isinstance(cost, bool) or not isinstance(cost, int | float):
-        return None
-    return float(cost) if math.isfinite(cost) and cost >= 0 else None
 
 
 def reported_cost(outputs: Any) -> float | None:
@@ -35,7 +28,7 @@ def reported_cost(outputs: Any) -> float | None:
     llm_output = outputs.get("llm_output")
     if (
         isinstance(llm_output, Mapping)
-        and (cost := _cost_in(llm_output.get("token_usage"))) is not None
+        and (cost := cost_in(llm_output.get("token_usage"))) is not None
     ):
         return cost
     for generations in outputs.get("generations") or []:
@@ -44,7 +37,7 @@ def reported_cost(outputs: Any) -> float | None:
             kwargs = message.get("kwargs") if isinstance(message, Mapping) else None
             metadata = kwargs.get("response_metadata") if isinstance(kwargs, Mapping) else None
             usage = metadata.get("token_usage") if isinstance(metadata, Mapping) else None
-            if (cost := _cost_in(usage)) is not None:
+            if (cost := cost_in(usage)) is not None:
                 return cost
     return None
 

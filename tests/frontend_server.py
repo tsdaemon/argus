@@ -48,7 +48,11 @@ class BrowserModel(ToolCallingModel):
             )
         else:
             response = AIMessage(content=f"Read-only review complete: {question}")
-        return ChatResult(generations=[ChatGeneration(message=response)])
+        # Every call reports a cost, as OpenRouter does, so the UI shows spend.
+        return ChatResult(
+            generations=[ChatGeneration(message=response)],
+            llm_output={"token_usage": {"cost": 0.0042}},
+        )
 
     async def _agenerate(self, messages, stop=None, **kwargs):
         await asyncio.sleep(0.1)
@@ -78,7 +82,12 @@ async def serve():
     ssh.stderr.read = AsyncMock(return_value=b"")
     with (
         tempfile.TemporaryDirectory(prefix="argus-ui-") as workspace,
-        patch("argus.agent.graph._build_model", lambda *_: BrowserModel(tool_calls=[])),
+        patch(
+            "argus.agent.graph._build_model",
+            lambda _config, _name, recorder=None: BrowserModel(
+                tool_calls=[], callbacks=[recorder] if recorder else None
+            ),
+        ),
         patch("argus.providers.docker_provider.docker.DockerClient", lambda **_: docker),
         patch("argus.providers.ssh_provider.build_classifier", lambda *_, **__: ReadClassifier()),
         patch("asyncio.create_subprocess_exec", AsyncMock(return_value=ssh)),

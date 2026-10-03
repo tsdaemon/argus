@@ -8,6 +8,7 @@ SQLAlchemy over Postgres, and tests use an in-memory fake. The `runs`, `tool_cal
 from __future__ import annotations
 
 import uuid
+from decimal import Decimal
 from typing import Any, Protocol
 
 from sqlalchemy import case, func, select, update
@@ -38,6 +39,12 @@ class HistoryRepository(Protocol):
     async def chat_messages(self, thread_id: uuid.UUID) -> list:
         """AG-UI messages in first-seen order."""
 
+    async def add_cost(self, thread_id: uuid.UUID, usd: float) -> None:
+        """Add model spend to a thread's total; an unknown thread is ignored."""
+
+    async def total_cost(self) -> float:
+        """Model spend across all threads, in USD."""
+
 
 def make_engine(database_url: str) -> AsyncEngine:
     """An async engine on the psycopg3 driver, from the same URL the agent uses."""
@@ -50,6 +57,7 @@ def _thread_row(thread: Thread, author: dict | None = None) -> dict:
         "title": thread.title,
         "created_at": thread.created_at,
         "updated_at": thread.updated_at,
+        "cost_usd": float(thread.cost_usd or 0),
         "source": "agent" if author and author.get("kind") == "agent" else "human",
         "author": author if author and author.get("kind") == "agent" else None,
     }
@@ -144,6 +152,19 @@ class SqlHistory:
         )
         async with self._session() as session:
             return list(await session.scalars(query))
+
+    async def add_cost(self, thread_id: uuid.UUID, usd: float) -> None:
+        # Not `updated_at`: spending is not activity that should reorder the list.
+        async with self._session.begin() as session:
+            await session.execute(
+                update(Thread)
+                .where(Thread.id == thread_id)
+                .values(cost_usd=Thread.cost_usd + Decimal(str(usd)))
+            )
+
+    async def total_cost(self) -> float:
+        async with self._session() as session:
+            return float(await session.scalar(select(func.coalesce(func.sum(Thread.cost_usd), 0))))
 
     async def start_run(self, *, thread_id: uuid.UUID) -> uuid.UUID:
         run = Run(id=uuid.uuid4(), thread_id=thread_id)

@@ -28,6 +28,7 @@ from langchain_openai import ChatOpenAI
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.graph.state import CompiledStateGraph
 
+from argus.agent.cost import CostRecorder
 from argus.agent.identity import SenderIdentityMiddleware
 from argus.agent.memory import memory_middleware, seed_workspace
 from argus.agent.model import CostReportingChatOpenAI
@@ -55,7 +56,9 @@ register_harness_profile(
 )
 
 
-def _build_model(config: AgentConfig, model_name: str) -> ChatOpenAI:
+def _build_model(
+    config: AgentConfig, model_name: str, cost_recorder: CostRecorder | None = None
+) -> ChatOpenAI:
     # OpenRouter models come without a profile; deepagents derives its summarization
     # thresholds from `max_input_tokens`, and falls back to 170k tokens without it.
     return CostReportingChatOpenAI(
@@ -63,6 +66,7 @@ def _build_model(config: AgentConfig, model_name: str) -> ChatOpenAI:
         base_url=config.model_base_url,
         api_key=config.api_key,
         profile={"max_input_tokens": config.context_tokens},
+        callbacks=[cost_recorder] if cost_recorder else None,
     )
 
 
@@ -76,13 +80,14 @@ def build_graph(
     model: Any = None,
     worker_model: Any = None,
     unattended: bool = False,
+    cost_recorder: CostRecorder | None = None,
 ) -> CompiledStateGraph:
     """Assemble the Argus Agent graph.
 
     `providers` is every provider to bind tools from — the caller decides which.
     `provider_settings` is keyed the same way. `model`/
     `worker_model` override the OpenRouter models `config` would otherwise build, for
-    tests.
+    tests. `cost_recorder` is attached to the models built here, which summarization reuses.
     """
     workspace_root = Path(config.workspace_root)
     workspace_root.mkdir(parents=True, exist_ok=True)
@@ -113,12 +118,12 @@ def build_graph(
     worker = SubAgent(
         name="worker",
         description=_WORKER_DESCRIPTION,
-        model=worker_model or _build_model(config, config.worker_model),
+        model=worker_model or _build_model(config, config.worker_model, cost_recorder),
         middleware=extra_middleware,
     )
 
     return create_deep_agent(
-        model=model or _build_model(config, config.model),
+        model=model or _build_model(config, config.model, cost_recorder),
         tools=tools,
         system_prompt=(
             "This run is unattended. Operational calls requiring human approval are refused. "

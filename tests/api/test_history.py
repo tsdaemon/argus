@@ -112,4 +112,17 @@ async def test_history_routes_report_unavailable_without_a_store(approval_app):
     app, _docker = approval_app(history=None)
     async with client_for(app) as client:
         assert (await client.get("/api/threads")).status_code == 503
+        assert (await client.get("/api/costs")).status_code == 503
         assert (await client.delete(f"/api/threads/{uuid4()}")).status_code == 503
+
+
+async def test_threads_and_total_report_model_spend(approval_app):
+    history = InMemoryHistory()
+    app, _docker = approval_app(history=history)
+    async with client_for(app) as client:
+        thread_id = (await client.post("/api/threads")).json()["id"]
+        await history.add_cost(UUID(thread_id), 0.25)
+
+        assert (await client.get(f"/api/threads/{thread_id}")).json()["cost_usd"] == 0.25
+        assert (await client.get("/api/threads")).json()[0]["cost_usd"] == 0.25
+        assert (await client.get("/api/costs")).json() == {"total_usd": 0.25}

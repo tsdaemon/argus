@@ -40,6 +40,13 @@ export interface Thread {
   title: string | null;
   created_at: string;
   updated_at: string;
+  /** Model spend so far, in USD. */
+  cost_usd: number;
+}
+
+export function formatUsd(usd: number): string {
+  if (usd >= 1) return `$${usd.toFixed(2)}`;
+  return usd >= 0.001 ? `$${usd.toFixed(3)}` : "<$0.001";
 }
 
 /** The session is gone or was never there: go through the login form and come back. */

@@ -195,3 +195,13 @@ test("conversation tabs separate operator and agent threads", async ({ page, req
   await page.getByRole("tab", { name: "All", exact: true }).click();
   await expect(page.getByRole("navigation").getByText("Agent · hermes").first()).toBeVisible();
 });
+
+test("a conversation shows what its model calls cost", async ({ page }) => {
+  await start(page);
+  await send(page, "Price this question");
+  await expect(page.getByText("Read-only review complete: Price this question", { exact: true })).toBeVisible();
+  const row = page.getByRole("navigation").getByRole("button", { name: /Price this question/ });
+  await expect(row.locator(".thread-cost")).toHaveText("$0.004");
+  await expect(page.locator(".sidebar-footer .spent")).toHaveText(/^\$[\d.]+ spent$/);
+  await page.screenshot({ path: "/tmp/argus-cost.png" });
+});

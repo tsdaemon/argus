@@ -75,6 +75,11 @@ tasks:
     cmds:
       - uv run alembic upgrade head
 
+  backend:backfill-costs:
+    desc: Raise local thread costs to what Phoenix recorded for them (idempotent; needs deps:up).
+    cmds:
+      - uv run python -m argus.agent.phoenix_costs
+
   # --- Frontend ---
 
   frontend:install:
@@ -152,6 +157,12 @@ tasks:
     cmds:
       - scripts/sync-to-theseus.sh
     interactive: true
+
+  deploy:backfill-costs:
+    desc: Raise deployed thread costs to what the deployed Phoenix recorded for them (idempotent).
+    dotenv: [".env.deploy"]
+    cmds:
+      - scripts/theseus-compose.sh exec -T argus python -m argus.agent.phoenix_costs
 
   deploy:down:
     desc: Stop Argus on theseus.

@@ -42,13 +42,14 @@ def gateway(cost=0.0123):
     return httpx.MockTransport(handler)
 
 
-def model(cost=0.0123):
+def model(cost=0.0123, **kwargs):
     return CostReportingChatOpenAI(
         model="anthropic/claude-sonnet-4.5",
         base_url="http://gateway.test/v1",
         api_key="test",
         http_client=httpx.Client(transport=gateway(cost)),
         http_async_client=httpx.AsyncClient(transport=gateway(cost)),
+        **kwargs,
     )
 
 

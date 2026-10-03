@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
+from decimal import Decimal
 from typing import Any
 
 from sqlalchemy import (
@@ -20,6 +21,7 @@ from sqlalchemy import (
     ForeignKey,
     Identity,
     Index,
+    Numeric,
     SmallInteger,
     Text,
     UniqueConstraint,
@@ -59,6 +61,7 @@ class Thread(Base):
     )
     title: Mapped[str | None] = mapped_column(Text)
     status: Mapped[str] = mapped_column(Text, server_default="active")
+    cost_usd: Mapped[Decimal] = mapped_column(Numeric(14, 8), server_default="0")
 
     runs: Mapped[list[Run]] = relationship(back_populates="thread", **_children)
     messages: Mapped[list[Message]] = relationship(back_populates="thread", **_children)

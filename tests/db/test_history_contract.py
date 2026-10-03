@@ -2,6 +2,8 @@
 
 from uuid import uuid4
 
+import pytest
+
 
 async def test_created_thread_is_readable(history):
     thread_id = await history.create_thread(title="diagnose theseus")
@@ -107,3 +109,21 @@ async def test_filter_threads_by_original_sender_before_pagination(history):
     assert not any(row["id"] == external for row in human_rows)
     first_page = await history.list_threads(source="agent", limit=1)
     assert len(first_page) == 1 and first_page[0]["source"] == "agent"
+
+
+async def test_costs_add_up_per_thread_and_overall(history):
+    before = await history.total_cost()
+    thread_id = await history.create_thread()
+    assert (await history.get_thread(thread_id))["cost_usd"] == 0
+    updated_at = (await history.get_thread(thread_id))["updated_at"]
+
+    await history.add_cost(thread_id, 0.0123)
+    await history.add_cost(thread_id, 0.0002)
+    await history.add_cost(uuid4(), 5.0)  # unknown thread: ignored
+
+    row = await history.get_thread(thread_id)
+    assert row["cost_usd"] == pytest.approx(0.0125)
+    assert row["updated_at"] == updated_at
+    assert [t["cost_usd"] for t in await history.list_threads(limit=500) if t["id"] == thread_id] \
+        == [pytest.approx(0.0125)]
+    assert await history.total_cost() - before == pytest.approx(0.0125)

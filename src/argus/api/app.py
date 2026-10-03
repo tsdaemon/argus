@@ -19,6 +19,7 @@ from langgraph.checkpoint.base import BaseCheckpointSaver
 
 from argus.a2a.server import add_a2a_routes
 from argus.agent.api import build_agent
+from argus.agent.cost import CostRecorder
 from argus.agent.graph import build_graph
 from argus.agent.tracing import setup_tracing
 from argus.api.auth import add_auth
@@ -108,18 +109,21 @@ def build_app(
     )
     provider_settings = {name: config.providers[name].settings() for name in providers}
 
+    cost_recorder = CostRecorder(history.add_cost) if history is not None else None
     agui_agent = build_agent(
         config=config.agent,
         providers=providers,
         provider_settings=provider_settings,
         policy=policy,
         checkpointer=checkpointer,
+        cost_recorder=cost_recorder,
     )
     add_chat_routes(app, agui_agent, history)
     if config.a2a.enabled:
         unattended_graph = build_graph(
             config=config.agent, providers=providers, provider_settings=provider_settings,
             policy=policy, checkpointer=checkpointer, unattended=True,
+            cost_recorder=cost_recorder,
         )
         a2a_executor = add_a2a_routes(app, unattended_graph, a2a, history, config.a2a,
                                      config.agent.recursion_limit)

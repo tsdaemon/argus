@@ -1460,3 +1460,39 @@ Verification: 18 focused history/A2A API and repository tests passed, 6 real-Pos
 contracts skipped because Postgres was unavailable. Postgres filter SQL compiled. Three
 Playwright checks passed (conversation tabs, external author/reload, mobile layout).
 TypeScript/Vite build passed; Ruff and diff whitespace checks passed.
+
+### 2026-10-03 — Per-thread model spend
+
+argus records what each conversation cost itself, so spend is visible without Phoenix
+(tracing stays optional). `CostRecorder` (`agent/cost.py`) is a LangChain callback on the
+chat models `_build_model` creates; it reads the OpenRouter `usage.cost` that
+`CostReportingChatOpenAI` keeps, takes the thread from the run metadata (`thread_id`), and
+adds it to the new `threads.cost_usd` column (migration `b7e3f1c94a52`) through
+`HistoryRepository.add_cost`. It covers the planner, the worker, and summarization (which
+reuses the planner's model), in chat and A2A runs. A failed write is logged and ignored.
+Adding cost does not bump `updated_at`. Thread rows carry `cost_usd`; `GET /api/costs`
+returns the total. The sidebar shows each thread's cost under its title and the total in
+the footer, refreshed when a run finishes.
+
+Spend before this change is backfilled from Phoenix by `python -m argus.agent.phoenix_costs`
+(`task backend:backfill-costs`, `task deploy:backfill-costs`): it asks Phoenix's GraphQL
+`getProjectSessionById(sessionId).costSummary.total.cost` for each thread, 50 per request,
+and raises a thread's cost to that total when it is higher, so re-running changes nothing.
+The query was checked against the Phoenix source at the pinned `arize-phoenix-v20.14.0`.
+
+Not counted: `ssh_run` classifier calls (`llm` builds its own `ChatOpenAI`; Jev is a raw
+Decisions API call whose response may not report cost). The sync script (`deploy:sync`)
+inserts missing threads only, so a thread continued on both sides keeps each side's total.
+
+Verification: pytest 263 passed, 20 skipped (the SQL half of the history contract, including
+the new cost contract, skipped: no Postgres reachable). New tests cover a streamed and a plain
+call reaching the thread through a LangGraph run, planner + worker delegation through the real
+`build_graph`, a failing write, calls outside a thread, and the backfill against a fake Phoenix
+GraphQL. Playwright 13 passed, including a cost shown on the thread and the footer total.
+Later the same day, the operator ran `task backend:backfill-costs` locally: "Updated 0
+thread(s)". So the migrated column was read from real Postgres and the GraphQL query ran
+against the real local Phoenix without error; local Phoenix holds no cost for those threads.
+On theseus, the first `deploy:backfill-costs` right after `task deploy` failed with
+`ConnectError`: Phoenix was still starting. A rerun once it served `/healthz` updated 4
+threads, +$0.4824 in total, so the query and its auth work against the production Phoenix.
+Not yet run: a real OpenRouter call through the recorder.

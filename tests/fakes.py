@@ -81,6 +81,13 @@ class InMemoryHistory:
     async def chat_messages(self, thread_id: uuid.UUID) -> list:
         return list(self._messages.get(thread_id, {}).values())
 
+    async def add_cost(self, thread_id: uuid.UUID, usd: float) -> None:
+        if thread_id in self._threads:
+            self._threads[thread_id]["cost_usd"] += usd
+
+    async def total_cost(self) -> float:
+        return sum(thread["cost_usd"] for thread in self._threads.values())
+
     def _add(self, thread_id: uuid.UUID, title: str | None) -> None:
         now = datetime.now(UTC)
         self._threads[thread_id] = {
@@ -88,6 +95,7 @@ class InMemoryHistory:
             "title": title,
             "created_at": now,
             "updated_at": now,
+            "cost_usd": 0.0,
         }
 
 

@@ -99,7 +99,7 @@ def approval_app(tmp_path, monkeypatch):
         )
         monkeypatch.setattr(
             "argus.agent.graph._build_model",
-            lambda config, name: planner if name == config.model else worker,
+            lambda config, name, *_: planner if name == config.model else worker,
         )
         docker_client = MagicMock()
         monkeypatch.setattr(

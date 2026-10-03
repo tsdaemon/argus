@@ -62,6 +62,11 @@ Each step exists because something upstream does not do it:
 Arize's OpenAI instrumentor does not handle cost either, so switching instrumentors would not
 help.
 
+The same reported cost is also counted by argus itself, per thread, for the UI
+(`argus.agent.cost`). That does not need Phoenix. Spend from before argus counted it can be
+copied from Phoenix's sessions with `task backend:backfill-costs` (or `deploy:backfill-costs`),
+which raises each thread to its Phoenix total and is safe to re-run.
+
 ### The patched Phoenix image
 
 `phoenix/Dockerfile` builds stock `arizephoenix/phoenix:version-20.14.0` with one file replaced,
