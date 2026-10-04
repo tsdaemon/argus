@@ -204,6 +204,8 @@ async def test_thread_list_defaults_to_human_and_a2a_is_separate(approval_app):
         a2a = (await client.get("/api/threads?origin=a2a")).json()
         assert [r["id"] for r in a2a] == [str(agent)] and a2a[0]["origin"] == "a2a"
         assert (await client.get(f"/api/threads/{agent}")).json()["origin"] == "a2a"
+        everything = (await client.get("/api/threads?origin=all")).json()
+        assert {r["id"] for r in everything} == {str(human), str(agent)}
         assert (await client.get("/api/threads?origin=bogus")).status_code == 422
         stale = await client.get("/api/threads?source=agent")
         assert stale.status_code == 422 and "origin" in stale.json()["detail"]

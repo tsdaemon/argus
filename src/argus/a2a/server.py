@@ -40,7 +40,7 @@ class TokenContextBuilder(ServerCallContextBuilder):
 
 
 class OwnedContextBuilder(SimpleRequestContextBuilder):
-    def __init__(self, store: A2ARepository, history, idle_window=timedelta(hours=24), clock=None):
+    def __init__(self, store: A2ARepository, history, idle_window=timedelta(hours=1), clock=None):
         super().__init__(task_store=store)
         self.store = store
         self.history = history
@@ -54,7 +54,7 @@ class OwnedContextBuilder(SimpleRequestContextBuilder):
             return
         thread = await self.history.get_thread(thread_id)
         # Clock note: `updated_at` is stamped by the database (func.now()) while self.clock is
-        # the application's; against a 24h window, host/DB skew is negligible.
+        # the application's; against a 1h window, host/DB skew is negligible.
         if thread is not None and self.clock() - thread["updated_at"] <= self.idle_window:
             return
         new_thread = await self.history.create_thread(origin="a2a")

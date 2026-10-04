@@ -268,11 +268,11 @@ One task executes per context at a time. Streaming reports task status and the f
 it does not stream model tokens. Push callbacks and file inputs are not supported.
 
 Threads created through A2A are stored with `origin='a2a'`. `GET /api/threads` lists only
-`origin=human` threads by default; the web UI shows A2A threads in a separate, collapsed
-"Agents" sidebar section (`GET /api/threads?origin=a2a`). The old `source` filter now returns
-422. The thread-origin migration also backfills `origin='a2a'` for threads that idle-context
-rotation orphaned (no `a2a_contexts` row) by checking that the first user message has an
-agent author.
+`origin=human` threads by default; `origin=a2a` lists A2A threads and `origin=all` both. The web
+UI's conversation tabs map to these: All (`all`, the default), Mine (`human`), Agents (`a2a`).
+The old `source` filter returns 422. The thread-origin migration also backfills `origin='a2a'`
+for threads that idle-context rotation orphaned (no `a2a_contexts` row) by checking that the
+first user message has an agent author.
 
 A2A uses unattended execution for both planner and worker. Calls requiring human approval
 are refused; explicit policy ALLOW overrides still apply. A client cannot approve operations

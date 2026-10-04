@@ -29,7 +29,7 @@ the MCP application at `/mcp`. Enabling the `breakglass` provider adds `/breakgl
 The agent invokes provider tools directly in-process; MCP exposes them to external callers.
 External clients such as Hermes or Claude Code can call the same provider implementations
 over MCP. The planned A2A interface will let another agent call Argus Agent itself. Threads it creates
-(including idle-context rotations) have `origin='a2a'` and appear only in the UI's "Agents" section. The migration backfill marks A2A threads by an
+(including idle-context rotations) have `origin='a2a'` and are shown under the UI's "Agents" tab, not "Mine". The migration backfill marks A2A threads by an
 `a2a_contexts` link or an agent author (`argus_author.kind='agent'`) on the first user message.
 
 Run Argus locally with `task backend:dev`; `task deps:up` runs Postgres, Phoenix, and Docker

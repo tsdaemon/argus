@@ -155,12 +155,11 @@ main { flex: 1; min-width: 0; display: flex; flex-direction: column; background:
 .message-author-badge { color: var(--accent-light); font-size: 10px;
   text-transform: uppercase; letter-spacing: 0.08em; }
 
-.agent-threads { margin: 8px 0; }
-.agent-threads-toggle { display: flex; width: 100%; justify-content: space-between; padding: 7px 8px;
-  border: 0; border-radius: 6px; background: transparent; color: var(--ag-muted); font-size: 12px; }
-.agent-threads-toggle[aria-expanded=true] { color: var(--cream); }
-.agent-threads .thread-list { max-height: 30vh; overflow-y: auto; }
-.sidebar[data-collapsed] .agent-threads { display: none; }
+.conversation-tabs { display: flex; gap: 4px; margin: 0 0 18px; padding: 3px;
+  border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
+.conversation-tabs button { flex: 1; padding: 7px 5px; border: 0; border-radius: 5px;
+  background: transparent; color: var(--ag-muted); font-size: 12px; }
+.conversation-tabs button[aria-selected=true] { background: var(--raised); color: var(--cream); }
 .thread-author { display: block; margin-top: 4px; font-size: 10px; color: var(--accent-light); }
 .external-message { min-width: 0; }
 .external-message .message-author { color: #b6a4c9; }
@@ -168,6 +167,11 @@ main { flex: 1; min-width: 0; display: flex; flex-direction: column; background:
 .external-message [data-testid="copilot-user-message"] { padding-top: 0; background: transparent; }
 .argus-chat .external-message [data-message-id] .cpk\:bg-muted {
   background: #261d35; border-color: #57416f; }
+.sidebar[data-collapsed] .conversation-tabs { display: none; }
+@media (max-width: 700px) {
+  .conversation-tabs { margin: 0; grid-column: 1 / -1; }
+  .sidebar[data-collapsed] .conversation-tabs { display: flex; }
+}
 
 .day-divider { display: flex; align-items: center; gap: 12px; margin: 18px 0 10px; color: var(--ag-muted); font-size: 11px; letter-spacing: 0.04em; }
 .day-divider::before, .day-divider::after { content: ""; flex: 1; border-top: 1px solid var(--line); }

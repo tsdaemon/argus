@@ -216,28 +216,28 @@ test("external sender remains visible after reload and an operator reply", async
 });
 
 
-test("agent threads live in a collapsed Agents section", async ({ page, request }) => {
+test("conversation tabs separate operator and agent threads", async ({ page, request }) => {
   await request.post("/__test__/external-message");
   await start(page);
   await send(page, "My private diagnostics");
   await expect(page.getByText("Read-only review complete: My private diagnostics", { exact: true })).toBeVisible();
-  const nav = page.getByRole("navigation");
-  await expect(nav.getByText("My private diagnostics", { exact: true })).toBeVisible();
-  await expect(page.getByText("External agent conversation").first()).toHaveCount(0);
-  const toggle = page.getByRole("button", { name: /^Agents/ });
-  await expect(toggle).toHaveAttribute("aria-expanded", "false");
-  await toggle.click();
-  await expect(page.getByText("External agent conversation").first()).toBeVisible();
-  await expect(nav.getByText("External agent conversation").first()).toHaveCount(0);
-  await page.getByText("External agent conversation").first().click();
+  await page.getByRole("tab", { name: "Agents", exact: true }).click();
+  await expect(page.getByRole("navigation").getByText("My private diagnostics", { exact: true })).toHaveCount(0);
+  await expect(page.getByRole("navigation").getByText("Agent · hermes").first()).toBeVisible();
   await expect(page.locator(".external-message").first()).toBeVisible();
+  await page.getByRole("tab", { name: "Mine", exact: true }).click();
+  await expect(page.getByRole("navigation").getByText("My private diagnostics", { exact: true })).toBeVisible();
+  await expect(page.getByRole("navigation").getByText("Agent · hermes")).toHaveCount(0);
+  await page.getByRole("tab", { name: "All", exact: true }).click();
+  await expect(page.getByRole("navigation").getByText("Agent · hermes").first()).toBeVisible();
 });
 
-test("a deep link to an agent thread expands the Agents section", async ({ page, request }) => {
+test("a deep link to an agent thread opens it from the default tab", async ({ page, request }) => {
   const { id } = await (await request.post("/__test__/external-message")).json();
   await page.goto(`/?thread=${id}`);
-  await expect(page.getByRole("button", { name: /^Agents/ })).toHaveAttribute("aria-expanded", "true");
+  await expect(page.getByRole("tab", { name: "All", exact: true })).toHaveAttribute("aria-selected", "true");
   await expect(page.locator(".external-message").first()).toBeVisible();
+  await expect(page.getByRole("navigation").getByText("Agent · hermes").first()).toBeVisible();
 });
 
 test("a conversation shows what its model calls cost", async ({ page }) => {

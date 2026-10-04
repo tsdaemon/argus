@@ -291,8 +291,13 @@ async def test_idle_window_rotates_fixed_context_to_new_thread(a2a_app):
         assert len(history._threads) == threads_before  # orphan thread was cleaned up
         assert await store.thread(fixed, first.id) == th1
         assert len(await history.chat_messages(th1)) == 4
-        # Idle for more than 24h: a new thread; the old one is untouched.
-        stale = datetime.now(UTC) - timedelta(hours=25)
+        # Idle just under 1h: still the same thread.
+        history._threads[th1]["updated_at"] = datetime.now(UTC) - timedelta(minutes=59)
+        await send("Second again", contextId=fixed)
+        assert await store.thread(fixed, first.id) == th1
+        assert len(await history.chat_messages(th1)) == 6
+        # Idle for more than 1h: a new thread; the old one is untouched.
+        stale = datetime.now(UTC) - timedelta(minutes=61)
         history._threads[th1]["updated_at"] = stale
         t3 = await send("Third", contextId=fixed)
         th3 = await store.thread(fixed, first.id)
@@ -301,7 +306,7 @@ async def test_idle_window_rotates_fixed_context_to_new_thread(a2a_app):
         assert (await history.get_thread(th3))["origin"] == "a2a"
         listed = {r["id"] for r in await history.list_threads(origin="human", limit=100)}
         assert not {th1, th3} & listed
-        assert len(await history.chat_messages(th1)) == 4
+        assert len(await history.chat_messages(th1)) == 6
         assert history._threads[th1]["updated_at"] == stale
         assert history._threads[th3]["title"] == "Third"
         # The next message goes to the new thread.
@@ -313,7 +318,7 @@ async def test_idle_window_rotates_fixed_context_to_new_thread(a2a_app):
                                                           contextId=fixed))).json()
         assert cont["error"]["code"] == -32602, cont
         assert await store.thread(fixed, first.id) == th3
-        assert len(await history.chat_messages(th1)) == 4
+        assert len(await history.chat_messages(th1)) == 6
         assert len(await history.chat_messages(th3)) == 4
         # Empty contextId: server-generated context and thread.
         fresh = await send("Fresh")

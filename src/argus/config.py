@@ -76,7 +76,7 @@ class A2AConfig(BaseModel):
     enabled: bool = False
     url: str = "http://localhost:8421/a2a"
     # A client-chosen contextId continues its thread only if the thread was active this recently.
-    thread_idle_window_seconds: int = 24 * 60 * 60
+    thread_idle_window_seconds: int = 60 * 60
 
 
 class ArgusConfig(BaseModel):
