@@ -47,6 +47,8 @@ services:
       ARGUS_APPROVAL_URL: http://${THESEUS_IP:?set THESEUS_IP in .env}:${ARGUS_PORT:-8421}
       ARGUS_ROUTER_SSH_PORT: ${ARGUS_ROUTER_SSH_PORT:?set ARGUS_ROUTER_SSH_PORT in .env}
       THESEUS_IP: ${THESEUS_IP:?set THESEUS_IP in .env}
+      # Home Assistant long-lived token (a secret); exported by scripts/theseus-compose.sh.
+      ARGUS_HA_TOKEN: ${ARGUS_HA_TOKEN:?run through scripts/theseus-compose.sh}
       # phoenix.otel sends it as the exporter's bearer token; Phoenix accepts its admin secret.
       PHOENIX_API_KEY: ${DEPLOY_PHOENIX_ADMIN_SECRET:?set DEPLOY_PHOENIX_ADMIN_SECRET in .env.deploy}
     # Replaces the base file's config bind mount with the config below. The workspace is a

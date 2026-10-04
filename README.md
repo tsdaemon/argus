@@ -206,7 +206,8 @@ task deploy:sync    # merge conversations and agent workspace both ways with loc
 
 The Docker daemon is remote, so nothing is bind-mounted from this machine:
 `scripts/theseus-compose.sh` reads the config and SSH keys here and the overlay injects them
-as Compose configs and secrets.
+as Compose configs and secrets. The Home Assistant token (`DEPLOY_ARGUS_HA_TOKEN` in
+`.env.deploy`) is passed the same way and reaches the container as `ARGUS_HA_TOKEN`.
 
 ## Configuration
 
@@ -214,8 +215,8 @@ See [`examples/argus.example.yaml`](examples/argus.example.yaml) for every knob,
 [`examples/theseus.argus.yaml`](examples/theseus.argus.yaml) for a real deployment's shape. In
 short:
 
-- `providers:` enables and configures shared operational backends (currently: `docker`,
-  `breakglass`).
+- `providers:` enables and configures shared operational backends (`docker`, `breakglass`, `ssh`,
+  `prometheus`, `homeassistant`).
 - `policy:` sets the class defaults (`default_mutate`, `default_destructive`) and any per-tool
   `overrides:` keyed `"<provider>.<tool_name>"` — enforced identically whether a tool is reached
   through the agent or through `/mcp`.
@@ -266,6 +267,13 @@ failed; a new message closes unanswered calls and starts a new turn without repl
 One task executes per context at a time. Streaming reports task status and the final answer;
 it does not stream model tokens. Push callbacks and file inputs are not supported.
 
+Threads created through A2A are stored with `origin='a2a'`. `GET /api/threads` lists only
+`origin=human` threads by default; the web UI shows A2A threads in a separate, collapsed
+"Agents" sidebar section (`GET /api/threads?origin=a2a`). The old `source` filter now returns
+422. The thread-origin migration also backfills `origin='a2a'` for threads that idle-context
+rotation orphaned (no `a2a_contexts` row) by checking that the first user message has an
+agent author.
+
 A2A uses unattended execution for both planner and worker. Calls requiring human approval
 are refused; explicit policy ALLOW overrides still apply. A client cannot approve operations
 or launch break-glass. These tokens grant access to the agent's **shared private workspace
@@ -279,6 +287,18 @@ MCP access; `ARGUS_MCP_TOKEN` remains separate.
   `allowed_containers` list.
 - **`breakglass`** — `request_break_glass` (available to the agent and through the MCP interface; it only
   records a request, see [`docs/DESIGN.md`](docs/DESIGN.md#trust-boundaries)), plus the Postgres-backed request store behind the `/breakglass` web view.
+- **`ssh`** — one `ssh_run` tool for shell commands on named hosts (the Asuswrt-Merlin router,
+  the Home Assistant OS host); each command is risk-classified, so reads run, changes ask,
+  destructive commands are refused.
+- **`prometheus`** — metric queries, discovery, targets, alerts (all READ).
+- **`homeassistant`** — Home Assistant's REST API with a long-lived token (`url`, `token:
+  ${ARGUS_HA_TOKEN}`, `timeout_seconds`). READ tools: `ha_get_state`, `ha_list_states`,
+  `ha_get_history`, `ha_get_logbook`, `ha_get_error_log`, `ha_list_services`,
+  `ha_render_template`, `ha_check_config`. `ha_call_service` is classified per call: `get_*`
+  services run (READ); `homeassistant.restart`/`stop`, `recorder.disable`, `hassio.*`,
+  `shell_command.*`, `python_script.*`/`pyscript.*` and any service named
+  `purge*`/`delete*`/`remove*`/`factory_reset*`/`wipe*`/`erase*` are refused; everything else (lights, scripts, `homeassistant.reload_*`, ...) asks
+  for approval.
 
 **Roadmap** (same `Provider` shape, not built yet — see [Adding a provider](#adding-a-provider)):
 `systemd` (unit status, journal logs, restart unit), `disk`/SMART (health, storage usage),

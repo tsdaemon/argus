@@ -28,7 +28,9 @@ the MCP application at `/mcp`. Enabling the `breakglass` provider adds `/breakgl
 
 The agent invokes provider tools directly in-process; MCP exposes them to external callers.
 External clients such as Hermes or Claude Code can call the same provider implementations
-over MCP. The planned A2A interface will let another agent call Argus Agent itself.
+over MCP. The planned A2A interface will let another agent call Argus Agent itself. Threads it creates
+(including idle-context rotations) have `origin='a2a'` and appear only in the UI's "Agents" section. The migration backfill marks A2A threads by an
+`a2a_contexts` link or an agent author (`argus_author.kind='agent'`) on the first user message.
 
 Run Argus locally with `task backend:dev`; `task deps:up` runs Postgres, Phoenix, and Docker
 canaries in Compose. The workspace is a host directory so the operator can watch it change.
@@ -58,6 +60,7 @@ are base dependencies in `pyproject.toml`.
 | Server factory `create_app` and its lifespan | `src/argus/api/app.py` |
 | Docker visibility and restart tools | `src/argus/providers/docker_provider.py` |
 | Shell over SSH on named hosts, classified per command | `src/argus/providers/ssh_provider.py` |
+| Home Assistant REST: state/history/logbook/log/template reads; `ha_call_service` classified per call | `src/argus/providers/homeassistant_provider.py` |
 | Prometheus queries, metric discovery, targets, alerts (all READ) | `src/argus/providers/prometheus_provider.py` |
 | Per-call command risk classifiers (`jev`, `llm`, `ask`) and their factory | `src/argus/classifier/` |
 | Agent middleware storing per-call classifications for HITL | `src/argus/agent/classification.py` |
@@ -93,10 +96,11 @@ LangChain tool names replace dots with underscores (`docker_restart_container`).
   instance needs no `ApprovalBackend` because it only calls `.decide()`.
 - **Per-call classification** is for a tool whose risk depends on its arguments: `ssh.run`
   (agent and MCP name `ssh_run`) runs any shell command on a host named under the `ssh`
-  provider's `hosts` (the router, as its root `admin` user). Top-level settings are defaults a
+  provider's `hosts` (the router as its root `admin` user, the Home Assistant OS host as root). Top-level settings are defaults a
   host overrides, as in the launcher; each host has its own classifier, whose context is the
-  host's name, `user@address`, and `description`. Commands run with `ssh -tt` so that stopping the
-  client on timeout hangs up the command on the host (the router's BusyBox has no `timeout`);
+  host's name, `user@address`, and `description`. Commands run with `ssh -tt` (host option `tty`, default true) so that stopping the
+  client on timeout hangs up the command on the host (BusyBox hosts such as the router and HAOS may have no `timeout`).
+  HAOS runs nothing under `-tt`, so its host sets `tty: false`; without a tty a timeout may not stop the remote command;
   `timeout_seconds` is an optional tool argument, defaulting to the host's `timeout_seconds`
   (30) and capped at its `max_timeout_seconds` (300). A timed-out call returns its output so far.
   Its `ToolSpec.classify` uses the classifier the provider's `classifier.type` names:
@@ -113,6 +117,12 @@ LangChain tool names replace dots with underscores (`docker_restart_container`).
   and see the same answer on both passes. A missing result reads as MUTATE. MCP awaits
   the classifier in `PolicyEngine._classified_gate`. The classifier is the only thing
   narrowing this tool.
+  `ha.call_service` (`ha_call_service`) classifies the same way, from `domain` and `service`
+  alone, with no I/O (`classify_service` in `homeassistant_provider.py`): `get_*` services are
+  READ; `homeassistant.restart`/`stop`, `recorder.disable`, the `hassio`, `shell_command`,
+  `python_script` and `pyscript` domains, and any service named `purge*`/`delete*`/`remove*`/
+  `factory_reset*`/`wipe*`/`erase*` are DESTRUCTIVE; the rest are MUTATE. The Home Assistant token is a header
+  only, never in a result, error, or log line.
 - **MCP approval** awaits real `ctx.elicit()` inside the policy gate before calling the
   implementation. It is not an advisory tool the model can skip. `ElicitApproval` refuses
   declined/cancelled requests and catches `ToolError` to fail closed.
@@ -272,11 +282,14 @@ the app without an admin repository get an open app on purpose.
 - `OPENROUTER_API_KEY` populates `agent.api_key` and the `ssh` provider's classifier key
   through YAML expansion.
 - SSH keys live in the gitignored `.ssh/`: `argus_launcher` is break-glass only, `argus_ssh`
-  is direct access (the router), kept apart so widening direct access never widens
-  break-glass. The router's host key is pinned in `.ssh/known_hosts`.
+  is direct access (the router and Home Assistant OS host), kept apart so widening direct access never widens
+  break-glass. Both hosts' keys are pinned in `.ssh/known_hosts` (HAOS: `[192.168.0.100]:22222`).
 - `ARGUS_AGENT_DATABASE_URL` supplies the example config and Alembic connection URL;
   `POSTGRES_PASSWORD` configures Compose's Postgres. The Taskfile's top-level `env`
   supplies the local database URL to every task, including mprocs's child processes.
+- `ARGUS_HA_TOKEN` is the Home Assistant long-lived access token the `homeassistant` provider
+  reads through `${ARGUS_HA_TOKEN}`. Locally it is in `.env`; deployed it is
+  `DEPLOY_ARGUS_HA_TOKEN` in `.env.deploy`, required by `scripts/theseus-compose.sh`.
 - `ARGUS_MCP_TOKEN` enables the optional `/mcp` interface of the server.
 - `ARGUS_ADMIN_PASSWORD` seeds the admin password on first `/login`; unset means a generated
   one is shown once.

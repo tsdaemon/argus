@@ -122,8 +122,7 @@ async def test_delete_removes_only_that_thread(history):
     assert await history.delete_thread(doomed) is False
 
 
-async def test_filter_threads_by_original_sender_before_pagination(history):
-    human = await history.create_thread(title="Operator conversation")
+async def test_thread_exposes_original_sender(history):
     external = await history.create_thread(title="External conversation")
     author = {
         "kind": "agent",
@@ -144,15 +143,6 @@ async def test_filter_threads_by_original_sender_before_pagination(history):
         ],
     )
     assert (await history.get_thread(external))["author"] == author
-    assert (await history.get_thread(human))["source"] == "human"
-    agent_rows = await history.list_threads(source="agent", limit=100)
-    assert any(row["id"] == external for row in agent_rows)
-    assert not any(row["id"] == human for row in agent_rows)
-    human_rows = await history.list_threads(source="human", limit=100)
-    assert any(row["id"] == human for row in human_rows)
-    assert not any(row["id"] == external for row in human_rows)
-    first_page = await history.list_threads(source="agent", limit=1)
-    assert len(first_page) == 1 and first_page[0]["source"] == "agent"
 
 
 async def test_costs_add_up_per_thread_and_overall(history):
@@ -171,3 +161,18 @@ async def test_costs_add_up_per_thread_and_overall(history):
     assert [t["cost_usd"] for t in await history.list_threads(limit=500) if t["id"] == thread_id] \
         == [pytest.approx(0.0125)]
     assert await history.total_cost() - before == pytest.approx(0.0125)
+
+
+async def test_threads_filter_by_origin(history):
+    human = await history.create_thread(title="mine")
+    agent = await history.create_thread(title="theirs", origin="a2a")
+
+    assert (await history.get_thread(human))["origin"] == "human"
+    assert (await history.get_thread(agent))["origin"] == "a2a"
+    a2a_ids = [r["id"] for r in await history.list_threads(origin="a2a", limit=100)]
+    human_ids = [r["id"] for r in await history.list_threads(origin="human", limit=100)]
+    assert agent in a2a_ids and human not in a2a_ids
+    assert human in human_ids and agent not in human_ids
+    # Touching an a2a thread keeps its origin.
+    await history.touch_thread(agent, "later")
+    assert (await history.get_thread(agent))["origin"] == "a2a"

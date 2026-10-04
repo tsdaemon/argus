@@ -31,9 +31,11 @@ class InMemoryHistory:
         self._threads: dict[uuid.UUID, dict] = {}
         self._messages: dict[uuid.UUID, dict[str, dict]] = {}
 
-    async def create_thread(self, *, title: str | None = None) -> uuid.UUID:
+    async def create_thread(
+        self, *, title: str | None = None, origin: str = "human"
+    ) -> uuid.UUID:
         thread_id = uuid.uuid4()
-        self._add(thread_id, title)
+        self._add(thread_id, title, origin)
         return thread_id
 
     async def touch_thread(self, thread_id: uuid.UUID, title: str | None) -> None:
@@ -45,14 +47,14 @@ class InMemoryHistory:
         thread["title"] = thread["title"] or title
 
     async def list_threads(
-        self, *, limit: int = 100, offset: int = 0, source: str | None = None
+        self, *, limit: int = 100, offset: int = 0, origin: str | None = None
     ) -> list[dict]:
         rows = sorted(
             self._threads.values(), key=lambda t: (t["updated_at"], t["id"]), reverse=True
         )
         rows = [self._with_author(row) for row in rows]
-        if source is not None:
-            rows = [row for row in rows if row["source"] == source]
+        if origin is not None:
+            rows = [row for row in rows if row["origin"] == origin]
         return rows[offset : offset + limit]
 
     async def get_thread(self, thread_id: uuid.UUID) -> dict | None:
@@ -68,7 +70,6 @@ class InMemoryHistory:
         external = bool(author and author.get("kind") == "agent")
         return {
             **thread,
-            "source": "agent" if external else "human",
             "author": author if external else None,
         }
 
@@ -106,12 +107,13 @@ class InMemoryHistory:
     async def total_cost(self) -> float:
         return sum(thread["cost_usd"] for thread in self._threads.values())
 
-    def _add(self, thread_id: uuid.UUID, title: str | None) -> None:
+    def _add(self, thread_id: uuid.UUID, title: str | None, origin: str = "human") -> None:
         now = datetime.now(UTC)
         self._threads[thread_id] = {
             "id": thread_id,
             "title": title,
             "title_source": None,
+            "origin": origin,
             "created_at": now,
             "updated_at": now,
             "cost_usd": 0.0,

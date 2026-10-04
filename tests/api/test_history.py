@@ -191,3 +191,21 @@ async def test_title_names_the_first_exchange_once_it_has_a_reply(approval_app, 
         await run_agent(client, run_input(thread_id))
         await asyncio.sleep(0.05)
         assert len(prompts) == 1
+
+
+async def test_thread_list_defaults_to_human_and_a2a_is_separate(approval_app):
+    history = InMemoryHistory()
+    app, _ = approval_app(history=history)
+    human = await history.create_thread(title="mine")
+    agent = await history.create_thread(title="theirs", origin="a2a")
+    async with client_for(app) as client:
+        default = [r["id"] for r in (await client.get("/api/threads")).json()]
+        assert str(human) in default and str(agent) not in default
+        a2a = (await client.get("/api/threads?origin=a2a")).json()
+        assert [r["id"] for r in a2a] == [str(agent)] and a2a[0]["origin"] == "a2a"
+        assert (await client.get(f"/api/threads/{agent}")).json()["origin"] == "a2a"
+        assert (await client.get("/api/threads?origin=bogus")).status_code == 422
+        stale = await client.get("/api/threads?source=agent")
+        assert stale.status_code == 422 and "origin" in stale.json()["detail"]
+        made = (await client.post("/api/threads")).json()
+        assert made["origin"] == "human"

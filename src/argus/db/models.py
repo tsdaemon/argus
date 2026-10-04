@@ -63,6 +63,8 @@ class Thread(Base):
     # None while the title is the first message's opening; then "generated" or "user".
     title_source: Mapped[str | None] = mapped_column(Text)
     status: Mapped[str] = mapped_column(Text, server_default="active")
+    # "human" for the operator's chats, "a2a" for threads created by the A2A interface.
+    origin: Mapped[str] = mapped_column(Text, server_default="human")
     cost_usd: Mapped[Decimal] = mapped_column(Numeric(14, 8), server_default="0")
 
     runs: Mapped[list[Run]] = relationship(back_populates="thread", **_children)

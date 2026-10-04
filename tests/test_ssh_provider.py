@@ -186,3 +186,36 @@ def test_registry_builds_it_from_config():
     config = ArgusConfig(providers={"ssh": ProviderEntry(enabled=True, hosts=HOSTS)})
 
     assert isinstance(instantiate_providers(config)["ssh"], SshProvider)
+
+
+def test_command_uses_tty_by_default_and_omits_it_when_disabled():
+    from argus.providers.ssh_provider import SshHost
+
+    on = SshHost(name="router", host="10.0.0.1", description="d").command("uptime")
+    off = SshHost(name="ha", host="10.0.0.2", description="d", port=22222, tty=False).command("uptime")
+    assert "-tt" in on
+    assert "-tt" not in off
+    assert off[-3:] == ["--", "root@10.0.0.2", "uptime"]
+    assert off[off.index("-p") + 1] == "22222"
+
+
+def test_tty_false_in_config_reaches_the_host():
+    provider = SshProvider(
+        {"hosts": {"ha": {"host": "h", "description": "d", "tty": False}}},
+        classifiers={"ha": MagicMock()},
+    )
+    assert provider._hosts["ha"].tty is False
+
+
+@pytest.mark.asyncio
+async def test_timeout_without_tty_does_not_promise_the_remote_command_stopped():
+    proc = fake_process(stdout=b"partial\r\n", hang=True)
+    hosts = {"ha": {"host": "h", "description": "d", "tty": False, "timeout_seconds": 0.01}}
+    (spec,) = SshProvider({"hosts": hosts}, classifiers={"ha": MagicMock()}).tool_specs({})
+
+    with patch("asyncio.create_subprocess_exec", new=AsyncMock(return_value=proc)):
+        result = await spec.fn(host="ha", command="sleep 9", ctx=None)
+
+    assert "stopped on the host" not in result
+    assert "client stopped; the remote command may still be running" in result
+    assert "partial" in result

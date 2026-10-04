@@ -57,7 +57,7 @@ class OwnedContextBuilder(SimpleRequestContextBuilder):
         # the application's; against a 24h window, host/DB skew is negligible.
         if thread is not None and self.clock() - thread["updated_at"] <= self.idle_window:
             return
-        new_thread = await self.history.create_thread()
+        new_thread = await self.history.create_thread(origin="a2a")
         try:
             # Compare-and-set: of concurrent requests only one rotates; the rest use its thread.
             rotated = await self.store.rotate_context(context_id, owner_id, thread_id, new_thread)
@@ -93,7 +93,7 @@ class OwnedContextBuilder(SimpleRequestContextBuilder):
             await self._rotate_if_idle(context_id, owner(context))
         result = await super().build(context, params, task_id, context_id, task)
         if result.context_id and await self.store.thread(result.context_id, owner(context)) is None:
-            thread_id = await self.history.create_thread()
+            thread_id = await self.history.create_thread(origin="a2a")
             try:
                 await self.store.create_context(result.context_id, owner(context), thread_id)
             except BaseException:

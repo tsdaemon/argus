@@ -102,9 +102,14 @@ def add_chat_routes(
     async def threads(
         limit: int = Query(100, ge=1, le=100),
         offset: int = Query(0, ge=0),
-        source: Literal["human", "agent"] | None = None,
+        origin: Literal["human", "a2a"] = "human",
+        source: str | None = None,
     ):
-        return await require_history().list_threads(limit=limit, offset=offset, source=source)
+        if source is not None:
+            raise HTTPException(
+                422, "The `source` filter was replaced by `origin` (human or a2a)."
+            )
+        return await require_history().list_threads(limit=limit, offset=offset, origin=origin)
 
     @app.get("/api/costs")
     async def costs():

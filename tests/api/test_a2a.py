@@ -297,6 +297,10 @@ async def test_idle_window_rotates_fixed_context_to_new_thread(a2a_app):
         t3 = await send("Third", contextId=fixed)
         th3 = await store.thread(fixed, first.id)
         assert th3 != th1 and t3["contextId"] == fixed
+        assert (await history.get_thread(th1))["origin"] == "a2a"
+        assert (await history.get_thread(th3))["origin"] == "a2a"
+        listed = {r["id"] for r in await history.list_threads(origin="human", limit=100)}
+        assert not {th1, th3} & listed
         assert len(await history.chat_messages(th1)) == 4
         assert history._threads[th1]["updated_at"] == stale
         assert history._threads[th3]["title"] == "Third"

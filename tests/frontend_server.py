@@ -106,7 +106,8 @@ async def serve():
 
         @app.post("/__test__/external-message")
         async def external_message():
-            thread_id = await history.create_thread(title="External agent conversation")
+            thread_id = await history.create_thread(
+                title="External agent conversation", origin="a2a")
             await history.save_chat_messages(thread_id, [
                 {"id": "external-request", "role": "user", "content": "Check the storage pool",
                  "metadata": {"argus_author": {"kind": "agent", "name": "hermes",

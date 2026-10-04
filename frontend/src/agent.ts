@@ -34,7 +34,7 @@ export class ArgusHttpAgent extends HttpAgent {
 }
 
 export interface Thread {
-  source: "human" | "agent";
+  origin: "human" | "a2a";
   author?: { name: string; token_id: string } | null;
   id: string;
   title: string | null;

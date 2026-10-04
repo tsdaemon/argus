@@ -48,6 +48,34 @@ providers:
     #       user: argus-bg
     #       port: 2222
 
+  # Shell on named hosts; every command is risk-classified (read runs, mutate asks, destroy
+  # is refused). Key and known_hosts are secrets; see docker-compose.deploy.yml.example.
+  # ssh:
+  #   enabled: true
+  #   identity_file: /run/secrets/argus_ssh_key
+  #   known_hosts_file: /run/secrets/argus_known_hosts
+  #   hosts:
+  #     router:
+  #       host: 192.168.0.1
+  #       user: admin
+  #       description: Home router (BusyBox); the description is the classifier's context.
+  #     homeassistant:
+  #       host: 192.168.0.100
+  #       port: 22222
+  #       user: root
+  #       tty: false   # default true (`ssh -tt`); HAOS runs nothing under -tt, but without a
+  #                    # tty a timeout may not stop the remote command
+  #       description: Home Assistant OS host (BusyBox-like, `ha` CLI, docker, /config).
+
+  # Home Assistant REST API with a long-lived token. Reads are READ; ha_call_service is
+  # classified per call (see AGENTS.md).
+  # homeassistant:
+  #   enabled: true
+  #   # Plain HTTP on the LAN: the token never leaves it.
+  #   url: http://192.168.0.100
+  #   token: ${ARGUS_HA_TOKEN}
+  #   timeout_seconds: 10
+
 # --- Agent: the LangGraph-based interactive harness (the `create_app` server) ---------
 # The agent invokes providers directly in-process. Its optional MCP interface exposes
 # those same provider tools to external clients, using the shared policy configuration.

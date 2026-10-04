@@ -12,7 +12,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Any, Protocol
 
-from sqlalchemy import case, func, select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async_engine
 
@@ -20,14 +20,17 @@ from argus.db.models import Approval, Message, Run, Thread, ToolCall
 
 
 class HistoryRepository(Protocol):
-    async def create_thread(self, *, title: str | None = None) -> uuid.UUID: ...
+    async def create_thread(
+        self, *, title: str | None = None, origin: str = "human"
+    ) -> uuid.UUID: ...
 
     async def touch_thread(self, thread_id: uuid.UUID, title: str | None) -> None:
         """Index a conversation, bumping `updated_at`; keep the first title it got."""
 
     async def list_threads(
-        self, *, limit: int = 100, offset: int = 0, source: str | None = None
-    ) -> list[dict]: ...
+        self, *, limit: int = 100, offset: int = 0, origin: str | None = None
+    ) -> list[dict]:
+        """Newest first; `origin` ('human' or 'a2a') restricts to one kind of thread."""
 
     async def get_thread(self, thread_id: uuid.UUID) -> dict | None: ...
 
@@ -74,7 +77,7 @@ def _thread_row(thread: Thread, author: dict | None = None) -> dict:
         "created_at": thread.created_at,
         "updated_at": thread.updated_at,
         "cost_usd": float(thread.cost_usd or 0),
-        "source": "agent" if author and author.get("kind") == "agent" else "human",
+        "origin": thread.origin,
         "author": author if author and author.get("kind") == "agent" else None,
     }
 
@@ -83,8 +86,10 @@ class SqlHistory:
     def __init__(self, engine: AsyncEngine) -> None:
         self._session = async_sessionmaker(engine, expire_on_commit=False)
 
-    async def create_thread(self, *, title: str | None = None) -> uuid.UUID:
-        thread = Thread(id=uuid.uuid4(), title=title)
+    async def create_thread(
+        self, *, title: str | None = None, origin: str = "human"
+    ) -> uuid.UUID:
+        thread = Thread(id=uuid.uuid4(), title=title, origin=origin)
         async with self._session.begin() as session:
             session.add(thread)
         return thread.id
@@ -113,13 +118,12 @@ class SqlHistory:
         )
 
     async def list_threads(
-        self, *, limit: int = 100, offset: int = 0, source: str | None = None
+        self, *, limit: int = 100, offset: int = 0, origin: str | None = None
     ) -> list[dict]:
         author = self._author()
         query = select(Thread, author.label("author"))
-        if source is not None:
-            origin = case((author["kind"].astext == "agent", "agent"), else_="human")
-            query = query.where(origin == source)
+        if origin is not None:
+            query = query.where(Thread.origin == origin)
         query = (
             query.order_by(Thread.updated_at.desc(), Thread.id.desc()).limit(limit).offset(offset)
         )

@@ -5,7 +5,8 @@ are defaults that a host entry overrides, as in the break-glass launcher. A host
 `description` tells the model what it is talking to; with the host's name and address it is
 the context its classifier judges commands against.
 
-Nothing on a host has to narrow what the key can do (the router's only account is root),
+Nothing on a host has to narrow what the key can do (the router's and Home Assistant OS's
+account is root),
 so the classifier is the boundary: policy maps its class to run / ask / refuse (see
 `argus.classifier`). The key is argus's direct-access identity (`argus_ssh`), separate
 from the break-glass launcher key, so widening one never widens the other.
@@ -38,6 +39,9 @@ class SshHost:
     # Default per command, and the most a call may ask for with `timeout_seconds`.
     timeout_seconds: float = 30.0
     max_timeout_seconds: float = 300.0
+    # Allocate a terminal (`ssh -tt`). Some hosts (HAOS on port 22222) run nothing under
+    # `-tt`; set false there. Without a tty a timeout may not stop the remote command.
+    tty: bool = True
 
     @property
     def context(self) -> str:
@@ -47,10 +51,12 @@ class SshHost:
     def command(self, command: str) -> list[str]:
         # `-tt` gives the command a terminal on the host. Stopping the local client then
         # closes it, and the host sends a hangup to everything the command started; without
-        # it the remote command outlives a timeout. The router has no `timeout` binary.
+        # it the remote command outlives a timeout. BusyBox hosts (router, HAOS) may have no `timeout` binary.
+        # With `tty: false` (HAOS) no terminal is allocated, so a timeout stops only the local
+        # client and the remote command may keep running.
         # LogLevel=ERROR drops the "Connection closed" notice `-tt` prints, not real errors.
         cmd = [
-            "ssh", "-tt", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10",
+            "ssh", *(["-tt"] if self.tty else []), "-o", "BatchMode=yes", "-o", "ConnectTimeout=10",
             "-o", "LogLevel=ERROR", "-p", str(self.port),
         ]
         if self.identity_file:
@@ -120,7 +126,12 @@ class SshProvider:
             stdout, stderr = await output
             result = _format_result(proc.returncode, stdout, stderr)
             if timed_out:
-                result = f"Timed out after {limit:g}s; stopped on the host. Output so far:\n{result}"
+                stopped = (
+                    "stopped on the host"
+                    if target.tty
+                    else "client stopped; the remote command may still be running"
+                )
+                result = f"Timed out after {limit:g}s; {stopped}. Output so far:\n{result}"
             return result
 
         # The host names become an enum in the tool schema, for the model and MCP clients.

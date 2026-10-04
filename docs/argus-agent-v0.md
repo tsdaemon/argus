@@ -1606,3 +1606,14 @@ session cookie signed from the local admin row. Findings and fixes:
 Seen but not fixed: inline code in assistant markdown renders with literal backticks.
 Suites: pytest 272 passed / 25 skipped (Postgres half, run separately: 46 passed), Playwright
 21 passed, ruff clean.
+
+### Home Assistant: SSH host and REST provider — 2026-10-04
+
+Added the `homeassistant` host to the `ssh` provider (HAOS on the RPi5, `root@192.168.0.100:22222`,
+same `argus_ssh` key) and a `homeassistant` provider (`providers/homeassistant_provider.py`):
+READ tools for state, history, logbook, error log, services, templates, and config check, and
+`ha_call_service`, classified per call by `classify_service` (`get_*` READ; restart/stop, `hassio`,
+`recorder.disable`, `shell_command`, `python_script`/`pyscript`, purge/delete/remove/factory_reset/wipe/erase DESTRUCTIVE; the rest MUTATE).
+The token is `${ARGUS_HA_TOKEN}` (`DEPLOY_ARGUS_HA_TOKEN` in `.env.deploy`). Verified with mocks
+only (httpx `MockTransport`): pytest 308 passed, 25 skipped (Postgres); ruff clean. Not run: the
+real HA, `ssh -tt` against HAOS, a real token, the known_hosts entry for `[192.168.0.100]:22222`.

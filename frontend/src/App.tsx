@@ -166,9 +166,10 @@ function Conversation({ thread, onBusy, onFinished }: {
 }
 
 export default function App() {
-  const [source, setSource] = useState<"all" | "human" | "agent">("all");
-  const sourceQuery = source === "all" ? "" : `&source=${source}`;
   const [threads, setThreads] = useState<Thread[]>([]);
+  // Conversations created by other agents over A2A; shown apart from the operator's own.
+  const [agentThreads, setAgentThreads] = useState<Thread[]>([]);
+  const [agentsOpen, setAgentsOpen] = useState(false);
   const [active, setActive] = useState<Thread | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -193,13 +194,14 @@ export default function App() {
 
   const refresh = useCallback(async () => {
     try {
-      const rows = await api<Thread[]>(`/api/threads?limit=${pageSize}${sourceQuery}`);
+      const rows = await api<Thread[]>(`/api/threads?limit=${pageSize}`);
+      api<Thread[]>(`/api/threads?limit=${pageSize}&origin=a2a`).then(setAgentThreads, () => {});
       setThreads((previous) => [...rows, ...previous.filter((old) => !rows.some((r) => r.id === old.id))]);
       setHasMore(rows.length === pageSize);
       setActive((current) => rows.find((r) => r.id === current?.id) ?? current);
       loadSpent();
     } catch (e) { setError(String(e)); }
-  }, [sourceQuery, loadSpent]);
+  }, [loadSpent]);
   // The server names a conversation just after its run ends, so look once more for the title.
   const onFinished = useCallback(() => {
     void refresh();
@@ -217,20 +219,24 @@ export default function App() {
   async function load() {
     setLoading(true); setError("");
     try {
-      const [rows, config] = await Promise.all([
-        api<Thread[]>(`/api/threads?limit=${pageSize}${sourceQuery}`),
+      const [rows, agentRows, config] = await Promise.all([
+        api<Thread[]>(`/api/threads?limit=${pageSize}`),
+        api<Thread[]>(`/api/threads?limit=${pageSize}&origin=a2a`),
         api<{ launch_enabled: boolean; auth_enabled: boolean }>("/api/ui-config"),
       ]);
-      setThreads(rows); setHasMore(rows.length === pageSize); setLaunch(config.launch_enabled); setAuthEnabled(config.auth_enabled);
+      setThreads(rows); setAgentThreads(agentRows); setHasMore(rows.length === pageSize); setLaunch(config.launch_enabled); setAuthEnabled(config.auth_enabled);
       loadSpent();
       const wanted = new URL(location.href).searchParams.get("thread");
       // The selected thread can be older than the first page.
       if (wanted && /^[0-9a-f-]{36}$/i.test(wanted)) {
         const selected = rows.find((r) => r.id === wanted);
+        const selectedAgent = agentRows.find((r) => r.id === wanted);
         if (selected) setActive(selected);
+        else if (selectedAgent) { setActive(selectedAgent); setAgentsOpen(true); }
         else {
           const found = await api<Thread>(`/api/threads/${wanted}`);
           setActive(found);
+          if (found.origin === "a2a") setAgentsOpen(true);
         }
       } else if (rows.length) select(rows[0]);
     } catch (e) { setError(String(e)); }
@@ -246,6 +252,7 @@ export default function App() {
     finally { setConfirming(null); }
     const remaining = threads.filter((t) => t.id !== thread.id);
     setThreads(remaining);
+    setAgentThreads((rows) => rows.filter((t) => t.id !== thread.id));
     if (active?.id === thread.id) {
       const next = remaining[0] ?? null;
       setActive(next);
@@ -262,7 +269,8 @@ export default function App() {
     setError("");
     try {
       const updated = await renameThread(thread.id, title);
-      setThreads((rows) => rows.map((r) => r.id === updated.id ? { ...r, ...updated } : r));
+      const apply = (rows: Thread[]) => rows.map((r) => r.id === updated.id ? { ...r, ...updated } : r);
+      setThreads(apply); setAgentThreads(apply);
       setActive((current) => current?.id === updated.id ? { ...current, ...updated } : current);
     } catch (e) { setError(String(e)); }
   }
@@ -271,59 +279,20 @@ export default function App() {
     setCreating(true); setError("");
     try {
       const thread = await api<Thread>("/api/threads", { method: "POST" });
-      setSource("all"); setThreads((rows) => [thread, ...rows]); select(thread);
+      setThreads((rows) => [thread, ...rows]); select(thread);
     } catch (e) { setError(String(e)); }
     finally { setCreating(false); }
   }
 
-  async function changeSource(next: "all" | "human" | "agent") {
-    if (busy || loading) return;
-    setSource(next); setLoading(true); setError("");
-    try {
-      const query = next === "all" ? "" : `&source=${next}`;
-      const rows = await api<Thread[]>(`/api/threads?limit=${pageSize}${query}`);
-      setThreads(rows); setHasMore(rows.length === pageSize);
-      setActive(null);
-      const url = new URL(location.href); url.searchParams.delete("thread");
-      history.replaceState(null, "", url);
-      if (rows.length) select(rows[0]);
-    } catch (e) { setError(String(e)); }
-    finally { setLoading(false); }
-  }
-
   async function more() {
     try {
-      const rows = await api<Thread[]>(`/api/threads?limit=${pageSize}&offset=${threads.length}${sourceQuery}`);
+      const rows = await api<Thread[]>(`/api/threads?limit=${pageSize}&offset=${threads.length}`);
       setThreads((current) => [...current, ...rows.filter((r) => !current.some((c) => c.id === r.id))]);
       setHasMore(rows.length === pageSize);
     } catch (e) { setError(String(e)); }
   }
 
-  return <div className="app-shell">
-    <aside className="sidebar" aria-label="Conversations" data-collapsed={collapsed || undefined}>
-      <div className="sidebar-top">
-        <a className="brand" href="/" aria-label="argus home"><img className="brand-mark" src={logo} alt="" />
-          <span className="label">argus<small>SEE EVERYTHING</small></span>
-        </a>
-        <button className="collapse-toggle" onClick={toggleSidebar} aria-expanded={!collapsed}
-          aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
-          data-tooltip={collapsed ? "Expand sidebar" : "Collapse sidebar"}>
-          <svg viewBox="0 0 20 20" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="1.6"
-            strokeLinecap="round" aria-hidden="true"><rect x="2.5" y="3.5" width="15" height="13" rx="3.2" /><path d="M8 3.8v12.4" /></svg>
-        </button>
-      </div>
-      <button className="new-chat" disabled={busy || creating || loading} onClick={() => void newChat()}
-        aria-label={collapsed ? "New conversation" : undefined} data-tooltip={collapsed ? "New conversation" : undefined}>
-        <span aria-hidden="true">＋</span> <span className="label">{creating ? "Creating…" : "New conversation"}</span>
-      </button>
-      <div className="conversation-tabs" role="tablist" aria-label="Conversation source">
-        {([ ["all", "All"], ["human", "Mine"], ["agent", "Agents"] ] as const).map(([value, label]) =>
-          <button key={value} role="tab" aria-selected={source === value} disabled={busy || loading}
-            onClick={() => void changeSource(value)}>{label}</button>)}
-      </div>
-      <div className="sidebar-heading">CONVERSATIONS</div>
-      <nav className="thread-list">
-        {threads.map((thread) => <div key={thread.id} className="thread-row">
+  const threadRow = (thread: Thread) => <div key={thread.id} className="thread-row">
           {confirming === thread.id ? <div className="thread-confirm" role="group" aria-label="Confirm deletion">
             <span>Delete this conversation?</span>
             <button className="danger" onClick={() => void remove(thread)}>Delete</button>
@@ -340,7 +309,7 @@ export default function App() {
               aria-current={active?.id === thread.id ? "page" : undefined}
               onClick={() => select(thread)}>
               <span>{thread.title || "New conversation"}</span>
-              {thread.source === "agent" && <small className="thread-author">Agent · {thread.author?.name || "External agent"}</small>}
+              {thread.author && <small className="thread-author">Agent · {thread.author.name || "External agent"}</small>}
               <div className="thread-meta">
                 <time dateTime={thread.updated_at}>{new Date(thread.updated_at).toLocaleDateString(undefined, {
                   month: "short", day: "numeric",
@@ -363,10 +332,41 @@ export default function App() {
               </svg>
             </button>
           </>}
-        </div>)}
+        </div>;
+
+  return <div className="app-shell">
+    <aside className="sidebar" aria-label="Conversations" data-collapsed={collapsed || undefined}>
+      <div className="sidebar-top">
+        <a className="brand" href="/" aria-label="argus home"><img className="brand-mark" src={logo} alt="" />
+          <span className="label">argus<small>SEE EVERYTHING</small></span>
+        </a>
+        <button className="collapse-toggle" onClick={toggleSidebar} aria-expanded={!collapsed}
+          aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+          data-tooltip={collapsed ? "Expand sidebar" : "Collapse sidebar"}>
+          <svg viewBox="0 0 20 20" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="1.6"
+            strokeLinecap="round" aria-hidden="true"><rect x="2.5" y="3.5" width="15" height="13" rx="3.2" /><path d="M8 3.8v12.4" /></svg>
+        </button>
+      </div>
+      <button className="new-chat" disabled={busy || creating || loading} onClick={() => void newChat()}
+        aria-label={collapsed ? "New conversation" : undefined} data-tooltip={collapsed ? "New conversation" : undefined}>
+        <span aria-hidden="true">＋</span> <span className="label">{creating ? "Creating…" : "New conversation"}</span>
+      </button>
+      <div className="sidebar-heading">CONVERSATIONS</div>
+      <nav className="thread-list">
+        {threads.map(threadRow)}
         {!loading && !threads.length && <p className="muted">Your conversations will appear here.</p>}
         {hasMore && <button disabled={busy} onClick={() => void more()}>Load older conversations</button>}
       </nav>
+      <section className="agent-threads" aria-label="Agent conversations">
+        <button className="agent-threads-toggle" aria-expanded={agentsOpen}
+          onClick={() => setAgentsOpen(!agentsOpen)}>
+          <span className="label">Agents</span> <small>{agentThreads.length}</small>
+        </button>
+        {agentsOpen && <div className="thread-list">
+          {agentThreads.map(threadRow)}
+          {!agentThreads.length && <p className="muted">No agent conversations.</p>}
+        </div>}
+      </section>
       <div className="sidebar-footer">
         <span className="status-dot" data-busy={busy || undefined} />
         <span className="label" role="status">{busy ? "Working…" : "Ready"}</span>

@@ -28,6 +28,15 @@ providers:
     enabled: true
     url: http://${THESEUS_IP}:9090
 
+  # Home Assistant REST API with a long-lived access token (Profile > Security in HA). Reads
+  # are READ; ha_call_service is classified per call (see AGENTS.md). Not a secret: the url.
+  homeassistant:
+    enabled: true
+    # Plain HTTP on the LAN (port 80, not 8123): the token never leaves the LAN.
+    url: http://192.168.0.100
+    token: ${ARGUS_HA_TOKEN}
+    timeout_seconds: 10
+
   # Shell on named hosts; each command is classified (read runs, mutate asks, destroy
   # refused). Top-level settings are defaults; a host entry overrides any of them.
   ssh:
@@ -45,6 +54,19 @@ providers:
         port: ${ARGUS_ROUTER_SSH_PORT}  # nonstandard; kept in .env
         user: admin
         description: Asuswrt-Merlin home router (RT-AC88U, BusyBox), root shell
+      homeassistant:
+        host: 192.168.0.100
+        port: 22222
+        user: root
+        # HAOS runs nothing under `ssh -tt`; without a tty a timeout may not stop the remote command.
+        tty: false
+        description: >-
+          Home Assistant OS host (Raspberry Pi 5), root shell on the HAOS host, not inside the
+          HA container. Minimal BusyBox/Alpine-like userland (no `timeout`, no package manager);
+          the Supervisor `ha` CLI is available (`ha core logs`, `ha core check`, `ha supervisor
+          info`, `ha addons`), and `docker ps` / `docker logs homeassistant` show the containers.
+          HA's config directory is /config in the container, /mnt/data/supervisor/homeassistant
+          on this host. `ha core restart`, `ha host reboot`, and `docker rm` interrupt the home.
 
 policy:
   default_mutate: require_approval

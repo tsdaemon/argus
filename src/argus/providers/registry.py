@@ -13,6 +13,7 @@ from argus.config import ArgusConfig
 from argus.providers.base import Provider
 from argus.providers.breakglass_provider import BreakglassProvider
 from argus.providers.docker_provider import DockerProvider
+from argus.providers.homeassistant_provider import HomeAssistantProvider
 from argus.providers.prometheus_provider import PrometheusProvider
 from argus.providers.ssh_provider import SshProvider
 
@@ -21,6 +22,7 @@ PROVIDER_REGISTRY: dict[str, type[Provider]] = {
     "breakglass": BreakglassProvider,
     "ssh": SshProvider,
     "prometheus": PrometheusProvider,
+    "homeassistant": HomeAssistantProvider,
 }
 
 

@@ -14,7 +14,10 @@ ARGUS_CONFIG_YAML="$(read_file "${CONFIG_FILE:?}")"$'\n'
 ARGUS_LAUNCHER_KEY="$(read_file "${ARGUS_LAUNCHER_KEY_PATH:?}")"$'\n'
 ARGUS_SSH_KEY="$(read_file "${ARGUS_SSH_KEY_PATH:?}")"$'\n'
 ARGUS_KNOWN_HOSTS="$(read_file "${ARGUS_KNOWN_HOSTS_PATH:?}")"$'\n'
-export ARGUS_CONFIG_YAML ARGUS_LAUNCHER_KEY ARGUS_SSH_KEY ARGUS_KNOWN_HOSTS
+# Home Assistant API token: a secret, like the keys; required, so a deploy without it fails
+# here rather than at config load in the container. The overlay passes it as an env var.
+ARGUS_HA_TOKEN="${DEPLOY_ARGUS_HA_TOKEN:?set DEPLOY_ARGUS_HA_TOKEN in .env.deploy}"
+export ARGUS_CONFIG_YAML ARGUS_LAUNCHER_KEY ARGUS_SSH_KEY ARGUS_KNOWN_HOSTS ARGUS_HA_TOKEN
 
 exec docker --context theseus compose --profile app \
   -f docker-compose.yml -f docker-compose.deploy.yml "$@"
