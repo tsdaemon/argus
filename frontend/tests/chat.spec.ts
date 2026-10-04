@@ -249,3 +249,16 @@ test("a conversation shows what its model calls cost", async ({ page }) => {
   await expect(page.locator(".sidebar-footer .spent")).toHaveText(/^\$[\d.]+ spent$/);
   await page.screenshot({ path: "/tmp/argus-cost.png" });
 });
+
+test("a failed run shows under its messages and can be resumed", async ({ page }) => {
+  await start(page);
+  await send(page, "Fail once, then answer");
+  const notice = page.getByRole("alert", { name: "Failed run" });
+  await expect(notice).toContainText("Run failed");
+  await expect(notice).toContainText("The model provider is unavailable");
+  await expect(page.getByRole("button", { name: "Reload conversation" })).toHaveCount(0);
+  await expect(page.getByTestId("copilot-message-list").getByRole("alert", { name: "Failed run" })).toBeVisible();
+  await notice.getByRole("button", { name: "Resume" }).click();
+  await expect(page.getByText("Read-only review complete: Fail once, then answer", { exact: true })).toBeVisible();
+  await expect(notice).toHaveCount(0);
+});

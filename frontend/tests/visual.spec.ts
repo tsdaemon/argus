@@ -1,4 +1,4 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 
 // Screenshot comparisons: each test renders one element against the fake-model server and
 // compares it with a stored image in `__screenshots__`. They catch layout and styling drift
@@ -11,6 +11,12 @@ async function start(page: Page) {
   await page.goto("/");
   await page.getByRole("button", { name: "New conversation", exact: true }).click();
   await expect(page.getByPlaceholder("Ask argus about your home infrastructure…")).toBeVisible();
+}
+
+// Times change between runs, and so does their width, which moves whatever sits next to them:
+// pin their text instead of masking them.
+async function pinTimes(times: Locator) {
+  await times.evaluateAll((elements) => elements.forEach((element) => { element.textContent = "12:00"; }));
 }
 
 async function send(page: Page, message: string) {
@@ -53,6 +59,15 @@ test("tool call card, collapsed and expanded", async ({ page }) => {
   await expect(card).toHaveScreenshot("tool-call-expanded.png");
 });
 
+test("failed run notice", async ({ page }) => {
+  await start(page);
+  // A question of its own: the fake model fails each such question once.
+  await send(page, "Fail once for the screenshot");
+  const notice = page.getByRole("alert", { name: "Failed run" });
+  await expect(notice.getByRole("button", { name: "Resume" })).toBeVisible();
+  await expect(notice).toHaveScreenshot("failed-run.png");
+});
+
 test("approval card for two actions", async ({ page }) => {
   await start(page);
   await send(page, "Please restart both services");
@@ -66,7 +81,8 @@ test("message from an external agent", async ({ page, request }) => {
   await page.goto(`/?thread=${seeded.id}`);
   const message = page.locator(".external-message").first();
   await expect(message).toContainText("Check the storage pool");
-  await expect(message).toHaveScreenshot("external-message.png", { mask: [message.locator(".message-time")] });
+  await pinTimes(message.locator(".message-time"));
+  await expect(message).toHaveScreenshot("external-message.png");
 });
 
 test("an exchange with its day divider and times", async ({ page }) => {
@@ -75,9 +91,8 @@ test("an exchange with its day divider and times", async ({ page }) => {
   await expect(page.getByText("Read-only review complete: Visual exchange check", { exact: true })).toBeVisible();
   const list = page.getByTestId("copilot-message-list");
   await expect(list.locator(".message-time")).toHaveCount(2);
-  await expect(list).toHaveScreenshot("exchange.png", {
-    mask: [list.locator(".message-time")], maxDiffPixelRatio: 0.01,
-  });
+  await pinTimes(list.locator(".message-time"));
+  await expect(list).toHaveScreenshot("exchange.png");
 });
 
 test("collapsed sidebar rail", async ({ page }) => {

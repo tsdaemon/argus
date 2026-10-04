@@ -191,3 +191,19 @@ def test_classification_middleware_covers_only_classified_bound_tools():
     denied = make_policy(overrides={"ssh.router": PolicyDecision.DENY})
     assert classification_middleware(denied, [classified_spec(ToolClass.READ, [])]) is None
     assert classification_middleware(make_policy(), [classified_spec(ToolClass.READ, [])]) is not None
+
+
+@pytest.mark.asyncio
+async def test_a_failing_tool_returns_its_error_to_the_model():
+    async def read_thing() -> str:
+        raise ValueError("Home Assistant returned 404 for /api/error_log: 404: Not Found")
+
+    spec = ToolSpec(tool_id="x.read_thing", tool_class=ToolClass.READ, summary="reads", fn=read_thing)
+    (tool,), _ = langchain_bind(make_policy(), [spec])
+
+    message = await tool.ainvoke(
+        {"type": "tool_call", "id": "call-1", "name": tool.name, "args": {}}
+    )
+
+    assert message.status == "error"
+    assert message.content.startswith("Error: Home Assistant returned 404 for /api/error_log")

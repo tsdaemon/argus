@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ComponentProps } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ComponentProps, type ReactNode } from "react";
 import {
   CopilotKitProvider, CopilotChat, CopilotChatAssistantMessage, CopilotChatConfigurationProvider, CopilotChatMessageView,
   CopilotChatUserMessage,
@@ -23,15 +23,19 @@ type MessageListProps = Parameters<NonNullable<ComponentProps<typeof CopilotChat
 // position jumps around in long conversations.
 // When each message was sent, and which ones open a new day, for the message components.
 const Stamps = createContext<Map<string, Stamp>>(new Map());
+// How the last run ended, when it needs saying: shown after its messages, not over the thread.
+const RunNotice = createContext<ReactNode>(null);
 
 function MessageList({ messageElements, interruptElement, isRunning, messages }: MessageListProps) {
   const seen = useRef(new Map<string, Date>());
   const stamps = useMemo(() => stampMessages(messages, seen.current), [messages]);
+  const notice = useContext(RunNotice);
   return <Stamps.Provider value={stamps}>
     <div data-testid="copilot-message-list" className="copilotKitMessages cpk:flex cpk:flex-col">
       {messageElements}
       {interruptElement}
       {isRunning && messages.at(-1)?.role !== "reasoning" && <div className="cpk:mt-2"><CopilotChatMessageView.Cursor /></div>}
+      {!isRunning && notice}
     </div>
   </Stamps.Provider>;
 }
@@ -84,15 +88,22 @@ function Chat({ thread, onBusy, onFinished }: {
   const [stalled, setStalled] = useState<RunState | null>(null);
   const [resuming, setResuming] = useState(false);
   const [uploadError, setUploadError] = useState("");
+  const [runError, setRunError] = useState("");
   const pending = agent.pendingInterrupts.length > 0;
   useInterrupt({ render: (props) => <Approvals key={props.interrupts.map((i) => i.id).join()} {...props} /> });
   useEffect(() => {
     const subscription = agent.subscribe({
-      onRunStartedEvent: () => { onBusy(true); setStalled(null); setUploadError(""); },
+      onRunStartedEvent: () => { onBusy(true); setStalled(null); setUploadError(""); setRunError(""); },
+      onRunErrorEvent: ({ event }) => {
+        setRunError(event.message || "The run failed.");
+        // A run that failed partway can usually carry on from its last step.
+        api<RunState>(`/api/threads/${thread.id}/run-state`)
+          .then((state) => setStalled(state.stalled ? state : null)).catch(() => {});
+      },
       onRunFinalized: () => { setConnecting(false); setResuming(false); onBusy(false); onFinished(); },
     });
     return () => { subscription.unsubscribe(); onBusy(false); };
-  }, [agent, onBusy, onFinished]);
+  }, [agent, thread.id, onBusy, onFinished]);
 
   const resume = useCallback(() => {
     setResuming(true);
@@ -112,18 +123,26 @@ function Chat({ thread, onBusy, onFinished }: {
     return () => { cancelled = true; };
   }, [connecting, thread.id, resume]);
 
-  return <>
+  const notice = runError || (stalled && !resuming)
+    ? <section className={runError ? "run-notice run-failed" : "run-notice"}
+      aria-label={runError ? "Failed run" : "Interrupted run"} role={runError ? "alert" : undefined}>
+      <div className="eyebrow">{runError ? "Run failed" : "Interrupted run"}</div>
+      {runError && <pre>{runError}</pre>}
+      {stalled ? <>
+        <p>{stalled.pending.length
+          ? "These calls had not finished. Resuming runs them again; sending a new message cancels them instead."
+          : "Resume to retry from the last completed step, or send a new message instead."}</p>
+        {stalled.pending.length > 0 && <ul>{stalled.pending.map((call, i) => <li key={i}>
+          <code>{call.name} {summarize(call.name, call.args)}</code>
+          <span className="tool-call-risk" data-risk={call.class}>{call.class === "mutate" ? "change" : call.class}</span>
+        </li>)}</ul>}
+        <button className="primary" onClick={resume}>Resume</button>
+      </> : <p>Send a message to carry on.</p>}
+    </section>
+    : null;
+
+  return <RunNotice.Provider value={notice}>
   {resuming && <div className="resume-notice" role="status">Resuming the interrupted run…</div>}
-  {stalled && !resuming && <section className="resume" aria-label="Interrupted run">
-    <div className="eyebrow">Interrupted run</div>
-    <p>The last run stopped before these calls finished. Resuming runs them again; sending a new
-      message cancels them instead.</p>
-    <ul>{stalled.pending.map((call, i) => <li key={i}>
-      <code>{call.name} {summarize(call.name, call.args)}</code>
-      <span className="tool-call-risk" data-risk={call.class}>{call.class === "mutate" ? "change" : call.class}</span>
-    </li>)}</ul>
-    <button className="primary" onClick={resume}>Resume</button>
-  </section>}
   {uploadError && <div className="resume-notice" role="alert">{uploadError}</div>}
   <CopilotChat
     threadId={thread.id} className="argus-chat" messageView={messageView}
@@ -143,7 +162,7 @@ function Chat({ thread, onBusy, onFinished }: {
       } : {}),
     }}
   />
-  </>;
+  </RunNotice.Provider>;
 }
 
 function Conversation({ thread, onBusy, onFinished }: {
@@ -154,7 +173,10 @@ function Conversation({ thread, onBusy, onFinished }: {
   }) }), [thread.id]);
   const [error, setError] = useState("");
   return <CopilotKitProvider agents__unsafe_dev_only={agents} enableInspector={false}
-    renderToolCalls={toolRenderers} onError={({ error }) => setError(error.message)}>
+    renderToolCalls={toolRenderers} onError={({ error, code }) => {
+      // A failed run is shown in the transcript, under the run.
+      if (code !== "agent_run_error_event") setError(error.message);
+    }}>
     <CopilotChatConfigurationProvider threadId={thread.id}>
       {error && <div className="error" role="alert">
         <p>{error}</p>

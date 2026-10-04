@@ -22,6 +22,9 @@ from argus.policy import CallClassification, ToolClass
 from tests.api.test_approvals import ToolCallingModel, restart_call
 from tests.fakes import InMemoryHistory
 
+# Questions asking for a failed run that have already failed once.
+failed_once: set[str] = set()
+
 
 class BrowserModel(ToolCallingModel):
     def _generate(self, messages, stop=None, **kwargs):
@@ -30,6 +33,9 @@ class BrowserModel(ToolCallingModel):
         )
         question = str(messages[last_user].content)
         results = [m for m in messages[last_user + 1 :] if isinstance(m, ToolMessage)]
+        if "fail once" in question.lower() and question not in failed_once:
+            failed_once.add(question)
+            raise RuntimeError("The model provider is unavailable")
         if results:
             response = AIMessage(content=f"Operation reviewed. {results[-1].content}")
         elif "uptime" in question.lower():

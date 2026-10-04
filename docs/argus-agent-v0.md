@@ -1617,3 +1617,40 @@ READ tools for state, history, logbook, error log, services, templates, and conf
 The token is `${ARGUS_HA_TOKEN}` (`DEPLOY_ARGUS_HA_TOKEN` in `.env.deploy`). Verified with mocks
 only (httpx `MockTransport`): pytest 308 passed, 25 skipped (Postgres); ruff clean. Not run: the
 real HA, `ssh -tt` against HAOS, a real token, the known_hosts entry for `[192.168.0.100]:22222`.
+
+### 2026-10-04 — A failed tool call no longer ends the run
+
+A provider exception (here `ha_get_error_log` getting a 404) escaped LangGraph's `ToolNode`,
+which by default handles only argument-validation errors, so the whole run ended in
+`RUN_ERROR` and the UI showed a run-level banner. `_to_structured_tool` now turns any
+exception from a provider into a `ToolException` with `handle_tool_error=True`: the model
+gets an error `ToolMessage` (`Error: <message>`, after the risk line for classified tools)
+and can carry on. The tool card shows such a result as `failed`.
+
+Verified: `tests/agent/test_tools.py::test_a_failing_tool_returns_its_error_to_the_model`;
+pytest 333 passed, 27 skipped (Postgres unavailable). The UI's `failed` badge has no
+browser test and has not been checked against a real model.
+
+### 2026-10-04 — A failed run is shown under the run, not over the thread
+
+A `RUN_ERROR` reached CopilotKit's provider `onError`, which showed a red banner above the
+whole conversation with "Reload conversation", as if the thread were broken. The provider
+now ignores `agent_run_error_event` (connection and other errors keep the banner); `Chat`
+subscribes to `onRunErrorEvent` and shows a "Run failed" card at the end of the transcript
+with the message. It checks `run-state`: a run that failed partway is stalled, so the card
+lists any unfinished calls and offers Resume; otherwise it says to send a message. The
+"Interrupted run" card moved into the same spot. A new run clears the card. It is not kept
+across a reload: a failed run with no pending calls then auto-resumes as any stalled
+read-only run does.
+
+Verified: Playwright `chat.spec.ts` "a failed run shows under its messages and can be
+resumed" (the fake model fails a "fail once" question once) and the new `failed-run`
+screenshot; Playwright 24 passed, twice. pytest 333 passed, 27 skipped (no Postgres).
+
+### 2026-10-04 — Screenshot tests no longer depend on the time of day
+
+"message from an external agent" failed depending on the hour: the masked time's width
+follows its text, and the header beside it is right-aligned, so the author moved by a few
+pixels. "an exchange with its day divider and times" hid the same drift behind
+`maxDiffPixelRatio: 0.01`. Both now set every `.message-time` to `12:00` before the
+screenshot instead of masking it, with no tolerance. Playwright: 24 passed, twice.

@@ -32,6 +32,9 @@ function splitRisk(result: string) {
   return { risk: match[1], note: match[2], output: result.slice(match[0].length) };
 }
 
+// A failed call's result (after any risk line) starts with `Error: ` (argus.agent.tools).
+const failed = (output: string) => output.startsWith("Error: ");
+
 const riskLabel: Record<string, string> = { read: "read", mutate: "change", destructive: "destructive" };
 
 export const ToolCallCard = defineToolCallRenderer({
@@ -41,7 +44,7 @@ export const ToolCallCard = defineToolCallRenderer({
     const summary = summarize(name, (args ?? {}) as Args);
     const text = result === undefined ? undefined : typeof result === "string" ? result : JSON.stringify(result, null, 2);
     const { risk, note, output } = splitRisk(text ?? "");
-    const state = String(status);
+    const state = status === "complete" && failed(output) ? "failed" : String(status);
 
     return <div className="tool-call" data-open={open || undefined}>
       <button className="tool-call-head" onClick={() => setOpen(!open)} aria-expanded={open}>
@@ -50,7 +53,7 @@ export const ToolCallCard = defineToolCallRenderer({
         {summary && <code className="tool-call-summary" title={summary}>{summary}</code>}
         {risk && <span className="tool-call-risk" data-risk={risk} title={note}>{riskLabel[risk]}</span>}
         <span className="tool-call-status" data-status={state}>
-          {state === "complete" ? "done" : state === "executing" ? "running" : "pending"}
+          {state === "failed" ? "failed" : state === "complete" ? "done" : state === "executing" ? "running" : "pending"}
         </span>
       </button>
       {open && <div className="tool-call-body">

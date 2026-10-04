@@ -19,7 +19,8 @@ from typing import Any
 from langchain.agents.middleware.human_in_the_loop import InterruptOnConfig
 from langchain.tools.tool_node import ToolCallRequest
 from langchain_core.messages import ToolCall
-from langchain_core.tools import StructuredTool
+from langchain_core.tools import StructuredTool, ToolException
+from langgraph.errors import GraphBubbleUp
 from pydantic import create_model
 
 from argus.agent.classification import (
@@ -57,8 +58,16 @@ def _to_structured_tool(spec: ToolSpec) -> StructuredTool:
     async def call(**kwargs: Any) -> Any:
         if has_ctx:
             kwargs = {**kwargs, "ctx": None}
-        result = await spec.fn(**kwargs)
         header = current_risk_header.get() if spec.classify is not None else None
+        try:
+            result = await spec.fn(**kwargs)
+        except GraphBubbleUp:
+            raise
+        except Exception as exc:
+            # A failed call is the model's to handle, not the end of the run. The UI
+            # marks a result starting with `Error: ` as failed.
+            error = f"Error: {str(exc) or type(exc).__name__}"
+            raise ToolException(f"{header}\n{error}" if header else error) from exc
         return f"{header}\n{result}" if header and isinstance(result, str) else result
 
     return StructuredTool.from_function(
@@ -66,6 +75,7 @@ def _to_structured_tool(spec: ToolSpec) -> StructuredTool:
         name=external_name(spec.tool_id),
         description=spec.summary,
         args_schema=_args_schema(spec.fn),
+        handle_tool_error=True,
     )
 
 
