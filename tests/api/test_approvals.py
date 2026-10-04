@@ -72,6 +72,7 @@ def approval_app(tmp_path, monkeypatch):
         worker_count=1,
         checkpointer=None,
         history=None,
+        **options,
     ):
         if mcp:
             monkeypatch.setenv("ARGUS_MCP_TOKEN", "test-token")
@@ -113,7 +114,8 @@ def approval_app(tmp_path, monkeypatch):
             },
             agent=AgentConfig(workspace_root=str(tmp_path / "workspace")),
         )
-        return build_app(config, checkpointer or InMemorySaver(), history), docker_client
+        app = build_app(config, checkpointer or InMemorySaver(), history, **options)
+        return app, docker_client
 
     return create
 

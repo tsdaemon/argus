@@ -1,12 +1,14 @@
-import { useCallback, useEffect, useMemo, useState, type ComponentProps } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ComponentProps } from "react";
 import {
-  CopilotKitProvider, CopilotChat, CopilotChatConfigurationProvider, CopilotChatMessageView, CopilotChatUserMessage,
+  CopilotKitProvider, CopilotChat, CopilotChatAssistantMessage, CopilotChatConfigurationProvider, CopilotChatMessageView,
+  CopilotChatUserMessage,
   useAgent, useCopilotKit, useInterrupt,
 } from "@copilotkit/react-core/v2";
 import {
-  api, ArgusHttpAgent, attachmentAccept, attachmentMaxSize, deleteThread, formatUsd, resumeProp, type RunState, type Thread,
+  api, ArgusHttpAgent, attachmentAccept, attachmentMaxSize, deleteThread, formatUsd, renameThread, resumeProp, type RunState, type Thread,
 } from "./agent";
 import { Approvals } from "./Approvals";
+import { MessageTime, stampMessages, type Stamp } from "./MessageTime";
 import { summarize, ToolCallCard } from "./ToolCall";
 import logo from "./logo.png";
 
@@ -19,24 +21,55 @@ type MessageListProps = Parameters<NonNullable<ComponentProps<typeof CopilotChat
 // Supplying the list's children turns off CopilotKit's virtualization, which it applies past
 // 50 messages: its estimated row heights fight the stick-to-bottom scroller and the scroll
 // position jumps around in long conversations.
+// When each message was sent, and which ones open a new day, for the message components.
+const Stamps = createContext<Map<string, Stamp>>(new Map());
+
 function MessageList({ messageElements, interruptElement, isRunning, messages }: MessageListProps) {
-  return <div data-testid="copilot-message-list" className="copilotKitMessages cpk:flex cpk:flex-col">
-    {messageElements}
-    {interruptElement}
-    {isRunning && messages.at(-1)?.role !== "reasoning" && <div className="cpk:mt-2"><CopilotChatMessageView.Cursor /></div>}
-  </div>;
+  const seen = useRef(new Map<string, Date>());
+  const stamps = useMemo(() => stampMessages(messages, seen.current), [messages]);
+  return <Stamps.Provider value={stamps}>
+    <div data-testid="copilot-message-list" className="copilotKitMessages cpk:flex cpk:flex-col">
+      {messageElements}
+      {interruptElement}
+      {isRunning && messages.at(-1)?.role !== "reasoning" && <div className="cpk:mt-2"><CopilotChatMessageView.Cursor /></div>}
+    </div>
+  </Stamps.Provider>;
 }
 function UserMessage(props: ComponentProps<typeof CopilotChatUserMessage>) {
   const author = props.message.metadata?.argus_author;
   const external = author?.kind === "agent";
-  return <div className={external ? "external-message" : undefined}>
-    {external && <div className="message-author" title={`A2A · ${author.token_id}`}>
-      <span className="message-author-badge">Agent</span> {author.name}
-    </div>}
-    <CopilotChatUserMessage {...props} />
-  </div>;
+  const stamp = useContext(Stamps).get(props.message.id);
+  return <>
+    <MessageTime stamp={stamp} part="day" />
+    <div className={external ? "external-message" : undefined}>
+      {external ? <div className="message-header">
+        <div className="message-author" title={`A2A · ${author.token_id}`}>
+          <span className="message-author-badge">Agent</span> {author.name}
+        </div>
+        <MessageTime stamp={stamp} part="time" />
+      </div> : <MessageTime stamp={stamp} part="time" align="end" />}
+      <CopilotChatUserMessage {...props} />
+    </div>
+  </>;
 }
-const messageView = { children: MessageList, userMessage: Object.assign(UserMessage, CopilotChatUserMessage) };
+function AssistantMessage(props: ComponentProps<typeof CopilotChatAssistantMessage>) {
+  const stamp = useContext(Stamps).get(props.message.id);
+  // A message that only carries tool calls shows no time of its own.
+  const text = typeof props.message.content === "string" && props.message.content.trim();
+  return <>
+    <MessageTime stamp={stamp} part="day" />
+    {/* One flex item, so the list's gap separates messages, not a message from its time. */}
+    <div className="assistant-turn">
+      {text && <MessageTime stamp={stamp} part="time" align="start" />}
+      <CopilotChatAssistantMessage {...props} />
+    </div>
+  </>;
+}
+const messageView = {
+  children: MessageList,
+  userMessage: Object.assign(UserMessage, CopilotChatUserMessage),
+  assistantMessage: Object.assign(AssistantMessage, CopilotChatAssistantMessage),
+};
 
 function readCollapsed() {
   try { return localStorage.getItem(collapsedKey) === "1"; } catch { return false; }
@@ -146,6 +179,7 @@ export default function App() {
   const [hasMore, setHasMore] = useState(false);
   const [collapsed, setCollapsed] = useState(readCollapsed);
   const [confirming, setConfirming] = useState<string | null>(null);
+  const [renaming, setRenaming] = useState<string | null>(null);
   const [spent, setSpent] = useState<number | null>(null);
   const loadSpent = useCallback(() => {
     api<{ total_usd: number }>("/api/costs").then((c) => setSpent(c.total_usd), () => setSpent(null));
@@ -166,7 +200,11 @@ export default function App() {
       loadSpent();
     } catch (e) { setError(String(e)); }
   }, [sourceQuery, loadSpent]);
-  const onFinished = useCallback(() => { void refresh(); }, [refresh]);
+  // The server names a conversation just after its run ends, so look once more for the title.
+  const onFinished = useCallback(() => {
+    void refresh();
+    window.setTimeout(() => void refresh(), 5000);
+  }, [refresh]);
 
   function select(thread: Thread) {
     if (busy) return;
@@ -215,6 +253,18 @@ export default function App() {
       if (next) url.searchParams.set("thread", next.id); else url.searchParams.delete("thread");
       history.replaceState(null, "", url);
     }
+  }
+
+  async function rename(thread: Thread, title: string) {
+    setRenaming(null);
+    title = title.trim();
+    if (!title || title === thread.title) return;
+    setError("");
+    try {
+      const updated = await renameThread(thread.id, title);
+      setThreads((rows) => rows.map((r) => r.id === updated.id ? { ...r, ...updated } : r));
+      setActive((current) => current?.id === updated.id ? { ...current, ...updated } : current);
+    } catch (e) { setError(String(e)); }
   }
 
   async function newChat() {
@@ -278,7 +328,14 @@ export default function App() {
             <span>Delete this conversation?</span>
             <button className="danger" onClick={() => void remove(thread)}>Delete</button>
             <button onClick={() => setConfirming(null)}>Cancel</button>
-          </div> : <>
+          </div> : renaming === thread.id ? <input className="thread-rename" autoFocus maxLength={100}
+            aria-label="Conversation title" defaultValue={thread.title ?? ""}
+            onFocus={(e) => e.currentTarget.select()}
+            onBlur={(e) => void rename(thread, e.currentTarget.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") e.currentTarget.blur();
+              if (e.key === "Escape") setRenaming(null);
+            }} /> : <>
             <button className="thread-select" disabled={busy}
               aria-current={active?.id === thread.id ? "page" : undefined}
               onClick={() => select(thread)}>
@@ -291,7 +348,14 @@ export default function App() {
                 {thread.cost_usd > 0 && <small className="thread-cost" title="Model spend">{formatUsd(thread.cost_usd)}</small>}
               </div>
             </button>
-            <button className="thread-delete" disabled={busy} aria-label="Delete conversation"
+            <button className="thread-action thread-edit" aria-label="Rename conversation"
+              data-tooltip="Rename conversation" onClick={() => setRenaming(thread.id)}>
+              <svg viewBox="0 0 20 20" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.6"
+                strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="M13.25 3.75l3 3L7 16H4v-3l9.25-9.25zM11.5 5.5l3 3" />
+              </svg>
+            </button>
+            <button className="thread-action thread-delete" disabled={busy} aria-label="Delete conversation"
               data-tooltip="Delete conversation" onClick={() => setConfirming(thread.id)}>
               <svg viewBox="0 0 20 20" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.6"
                 strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">

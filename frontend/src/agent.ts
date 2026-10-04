@@ -38,6 +38,8 @@ export interface Thread {
   author?: { name: string; token_id: string } | null;
   id: string;
   title: string | null;
+  /** null while the title is the first message's opening. */
+  title_source: "generated" | "user" | null;
   created_at: string;
   updated_at: string;
   /** Model spend so far, in USD. */
@@ -62,6 +64,15 @@ export async function deleteThread(id: string): Promise<void> {
   if (!response.ok && response.status !== 404) {
     throw new Error(`Could not delete the conversation (${response.status}).`);
   }
+}
+
+export async function renameThread(id: string, title: string): Promise<Thread> {
+  const response = await fetch(`/api/threads/${id}`, {
+    method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ title }),
+  });
+  if (response.status === 401) toLogin();
+  if (!response.ok) throw new Error(`Could not rename the conversation (${response.status}).`);
+  return response.json() as Promise<Thread>;
 }
 
 export async function api<T>(path: string, init?: RequestInit): Promise<T> {

@@ -1513,3 +1513,96 @@ Playwright check, and `git diff --check` passed.
 Changed agent message bubbles to muted purple with a matching border and sender label,
 visibly separating them from blue operator bubbles. CSS-only change.
 Verification: frontend TypeScript/Vite build and `git diff --check` passed.
+
+
+### 2026-10-04 — Conversation titles: generated and renamed
+
+A thread's title was the first message's opening (100 characters) forever. Now:
+- **Generated:** `TitleWriter` (`agent/titles.py`) names the topic after a run ends, from the
+  first operator message and the first assistant reply (1,500 characters each), as a
+  two-to-five-word noun phrase in the operator's language. It waits for a run with a reply, so
+  a run that stops at an approval leaves the placeholder until a later one. The call is
+  charged to the thread through `CostRecorder`; failures are logged and leave the placeholder.
+  The UI refreshes the list again 5 s after a run so the title appears.
+  First version reversed the same day: titling from the first message alone, with the worker
+  model, produced the operator's request reworded. Live comparison on OpenRouter (one
+  Ukrainian, one English exchange): `stepfun/step-3.7-flash` reasons mandatorily (no way to
+  disable), took 23–28 s and ~5k output tokens per title, and answered in English; at
+  `reasoning.effort: minimal` 4–8 s and still English. `google/gemini-3.7-flash` at minimal
+  effort took 1.5–1.9 s, 5 output tokens, ~$0.0002, in the right language. Titles therefore use
+  `agent.model` with `extra_body.reasoning.effort = minimal`. Live `TitleWriter` run on that
+  model gave "Стан Тезея та збої Jellyfin".
+- **Renamed:** `PATCH /api/threads/{id}` (`{"title": ...}`, 1–100 characters, whitespace
+  collapsed) and a pencil action beside delete in the conversation list (Enter or blur saves,
+  Escape cancels).
+- New nullable `threads.title_source` (migration `d4c2e8a71b05`): null for the placeholder,
+  then `generated` or `user`. Generation only replaces null, so it runs once per thread and
+  never overrides the operator. Existing threads get a title from their stored placeholder on
+  their next run.
+- `build_app(generate_titles=False)` by default so tests never call a model; `create_app`
+  turns it on. A2A threads keep the placeholder title for now.
+- The placeholder now also takes the text parts of a message with attachments.
+
+Verification: ruff clean; pytest 271 passed, 24 skipped (the Postgres half of the contract
+suites: Docker was not running, so `SqlHistory`'s new methods and the migration are
+unexercised); Playwright 14 passed, including rename that survives a later run and a reload.
+Not yet run: a real worker-model title call.
+
+
+### 2026-10-04 — Screenshot tests for the UI
+
+`frontend/tests/visual.spec.ts` compares single elements with reference images in
+`frontend/tests/__screenshots__/` (`{name}-{platform}.png`): conversation row (idle, hover,
+renaming, confirming deletion), tool call (collapsed, expanded), two-action approval card,
+external-agent message, collapsed sidebar. It uses the same fake-model server as `chat.spec.ts`,
+so it needs no database or model key. Elements rather than pages, because that server
+keeps earlier tests' conversations; dates and the spend total are masked.
+`task frontend:test:update` rewrites images that differ. Baselines were made on WSL
+(linux) with Playwright 1.63 Chromium; another platform needs its own set.
+The same pass enlarged the rename pencil to match the trash icon's footprint.
+Verification: Playwright 19 passed, two consecutive runs matched the baselines.
+
+
+### 2026-10-04 — Dates and times in the chat
+
+Each message shows when it was sent: a day divider ("Today", "Yesterday", or a short date,
+with the year only when it differs) before the first message of each day, and a small time
+above each operator message and each assistant message with text (tool-call-only messages
+show none). Labels use the browser's locale and time zone.
+- The time is `messages.created_at`, i.e. when argus first archived the message. `SqlHistory`
+  and the fake add it at read time as `metadata.argus_time`; stored content never carries it.
+- The chat route now archives the incoming operator message before the run starts, so it is
+  stamped when sent rather than at the first `MESSAGES_SNAPSHOT`. An assistant message is
+  stamped at the first snapshot that contains it.
+- `/connect` prefers the checkpoint's copy of a message but keeps the archive's time on it.
+- A message still streaming has no time until the next snapshot.
+Same day: the row actions moved to the title line so the date and cost keep the full width
+(the cost had shifted left of the two icons).
+Verification: pytest (contract: an update keeps the first time; `/connect` returns a time on
+every message), Playwright 21 passed twice in a row, including one divider per day and four
+times across a reload, and a masked screenshot of an exchange. Postgres half still skipped.
+
+
+### 2026-10-04 — First live local verification; cheap dev model
+
+Ran today's changes against the real local stack (Compose Postgres + Phoenix, `task
+backend:dev` with `examples/argus.dev.yaml`, real OpenRouter), driven by Playwright with a
+session cookie signed from the local admin row. Findings and fixes:
+- Migration `d4c2e8a71b05` applied to real Postgres; the full `tests/db` contract suite ran
+  against it (46 passed, none skipped).
+- **Times missing in the live session** until a reload, though the stream's
+  `MESSAGES_SNAPSHOT` carried `argus_time`: CopilotKit keeps its own copy of messages it
+  already shows. The fake-server tests had not caught it. The UI now falls back to the time it
+  first saw a message; archived times take over on reload.
+- **Titles took 14–32 s** (found in Phoenix spans): `qwen/qwen3.7-flash` ignores
+  `reasoning.effort: minimal` and reasoned 1.2–3.3k tokens per label. Gemini refuses
+  `reasoning.enabled: false`. The title call now asks for reasoning off and falls back to
+  `minimal` (`with_fallbacks`): Qwen 0.9 s, Gemini 3.8 s.
+- The dev config now runs both agent models on `qwen/qwen3.7-flash` ($0.03/$0.13 per M tokens
+  vs Gemini 3.7 Flash's $0.75/$3.75); it called tools correctly on the canaries.
+- Final browser run: Ukrainian question with two Docker reads, title "argus-live контейнери
+  зупинені" shown 5.7 s after the run, "Сьогодні" divider and times live and after reload,
+  cost <$0.001, no page errors.
+Seen but not fixed: inline code in assistant markdown renders with literal backticks.
+Suites: pytest 272 passed / 25 skipped (Postgres half, run separately: 46 passed), Playwright
+21 passed, ruff clean.

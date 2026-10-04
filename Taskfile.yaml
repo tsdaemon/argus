@@ -106,6 +106,12 @@ tasks:
     cmds:
       - npm test
 
+  frontend:test:update:
+    desc: Rerun the browser tests and rewrite the reference screenshots that differ.
+    dir: frontend
+    cmds:
+      - npm test -- --update-snapshots=changed
+
   # --- Docker ---
 
   docker:build:

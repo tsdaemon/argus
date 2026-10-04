@@ -60,6 +60,8 @@ class Thread(Base):
         TIMESTAMP(timezone=True), server_default=func.now()
     )
     title: Mapped[str | None] = mapped_column(Text)
+    # None while the title is the first message's opening; then "generated" or "user".
+    title_source: Mapped[str | None] = mapped_column(Text)
     status: Mapped[str] = mapped_column(Text, server_default="active")
     cost_usd: Mapped[Decimal] = mapped_column(Numeric(14, 8), server_default="0")
 

@@ -8,6 +8,7 @@ SQLAlchemy over Postgres, and tests use an in-memory fake. The `runs`, `tool_cal
 from __future__ import annotations
 
 import uuid
+from datetime import datetime
 from decimal import Decimal
 from typing import Any, Protocol
 
@@ -30,6 +31,12 @@ class HistoryRepository(Protocol):
 
     async def get_thread(self, thread_id: uuid.UUID) -> dict | None: ...
 
+    async def rename_thread(self, thread_id: uuid.UUID, title: str) -> bool:
+        """The operator's title, which nothing replaces; False if the thread does not exist."""
+
+    async def set_generated_title(self, thread_id: uuid.UUID, title: str) -> bool:
+        """A model's title, applied only over the first-message placeholder."""
+
     async def delete_thread(self, thread_id: uuid.UUID) -> bool:
         """Delete a conversation and everything under it; False if it does not exist."""
 
@@ -37,13 +44,21 @@ class HistoryRepository(Protocol):
         """Upsert AG-UI messages by their stable ID, never deleting earlier ones."""
 
     async def chat_messages(self, thread_id: uuid.UUID) -> list:
-        """AG-UI messages in first-seen order."""
+        """AG-UI messages in first-seen order, each with `metadata.argus_time` (first seen)."""
 
     async def add_cost(self, thread_id: uuid.UUID, usd: float) -> None:
         """Add model spend to a thread's total; an unknown thread is ignored."""
 
     async def total_cost(self) -> float:
         """Model spend across all threads, in USD."""
+
+
+TIME_KEY = "argus_time"
+
+
+def with_time(message: dict, at: datetime) -> dict:
+    """Stamp a message for display; the stored content never carries it."""
+    return {**message, "metadata": {**message.get("metadata", {}), TIME_KEY: at.isoformat()}}
 
 
 def make_engine(database_url: str) -> AsyncEngine:
@@ -55,6 +70,7 @@ def _thread_row(thread: Thread, author: dict | None = None) -> dict:
     return {
         "id": thread.id,
         "title": thread.title,
+        "title_source": thread.title_source,
         "created_at": thread.created_at,
         "updated_at": thread.updated_at,
         "cost_usd": float(thread.cost_usd or 0),
@@ -117,6 +133,23 @@ class SqlHistory:
             ).first()
             return _thread_row(*row) if row else None
 
+    async def rename_thread(self, thread_id: uuid.UUID, title: str) -> bool:
+        return await self._set_title(
+            update(Thread).where(Thread.id == thread_id), title, "user"
+        )
+
+    async def set_generated_title(self, thread_id: uuid.UUID, title: str) -> bool:
+        return await self._set_title(
+            update(Thread).where(Thread.id == thread_id, Thread.title_source.is_(None)),
+            title,
+            "generated",
+        )
+
+    async def _set_title(self, statement, title: str, source: str) -> bool:
+        async with self._session.begin() as session:
+            result = await session.execute(statement.values(title=title, title_source=source))
+            return result.rowcount > 0
+
     async def delete_thread(self, thread_id: uuid.UUID) -> bool:
         # The relationships use passive_deletes, so this issues one DELETE and the
         # ON DELETE CASCADE foreign keys remove every dependent row.
@@ -146,12 +179,12 @@ class SqlHistory:
 
     async def chat_messages(self, thread_id: uuid.UUID) -> list:
         query = (
-            select(Message.content)
+            select(Message.content, Message.created_at)
             .where(Message.thread_id == thread_id, Message.agui_id.is_not(None))
             .order_by(Message.chat_order)
         )
         async with self._session() as session:
-            return list(await session.scalars(query))
+            return [with_time(content, at) for content, at in await session.execute(query)]
 
     async def add_cost(self, thread_id: uuid.UUID, usd: float) -> None:
         # Not `updated_at`: spending is not activity that should reorder the list.

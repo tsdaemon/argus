@@ -56,8 +56,9 @@ agent:
   database_url: ${ARGUS_AGENT_DATABASE_URL}
   api_key: ${OPENROUTER_API_KEY}
   model_base_url: https://openrouter.ai/api/v1
-  model: google/gemini-3.7-flash
-  worker_model: stepfun/step-3.7-flash
+  # Cheap for local runs (~$0.03/$0.13 per M tokens); the deployed config sets its own models.
+  model: qwen/qwen3.7-flash
+  worker_model: qwen/qwen3.7-flash
   otel:
     enabled: true
     endpoint: http://127.0.0.1:6006/v1/traces

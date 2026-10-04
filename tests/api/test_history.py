@@ -1,7 +1,9 @@
+import asyncio
 import json
 from uuid import UUID, uuid4
 
 import pytest
+from langchain_core.language_models import FakeListChatModel
 from langgraph.checkpoint.memory import InMemorySaver
 
 from tests.api.test_approvals import (
@@ -52,6 +54,8 @@ async def test_history_and_pending_approval_survive_rebuilding_app(approval_app,
         await run_agent(client, payload)
         restored = events(await client.get(f"/api/threads/{thread_id}/connect"))
         assert not restored[-1].get("outcome")
+        # Every message, including those read back from the checkpoint, says when it was sent.
+        assert all("argus_time" in m["metadata"] for m in restored[1]["messages"])
         assert restored[1]["messages"][-1]["content"] == "Finished reviewing the operation."
         assert docker.containers.get.return_value.restart.call_count == (decision == "approve")
 
@@ -126,3 +130,64 @@ async def test_threads_and_total_report_model_spend(approval_app):
         assert (await client.get(f"/api/threads/{thread_id}")).json()["cost_usd"] == 0.25
         assert (await client.get("/api/threads")).json()[0]["cost_usd"] == 0.25
         assert (await client.get("/api/costs")).json() == {"total_usd": 0.25}
+
+
+async def test_operator_renames_a_conversation(approval_app):
+    app, _docker = approval_app(history=InMemoryHistory())
+    async with client_for(app) as client:
+        thread_id = (await client.post("/api/threads")).json()["id"]
+        renamed = await client.patch(f"/api/threads/{thread_id}", json={"title": "  NAS   disks "})
+        assert renamed.status_code == 200
+        assert (renamed.json()["title"], renamed.json()["title_source"]) == ("NAS disks", "user")
+        await run_agent(client, run_input(thread_id))
+        assert (await client.get(f"/api/threads/{thread_id}")).json()["title"] == "NAS disks"
+
+        for blank in ["", "   "]:
+            response = await client.patch(f"/api/threads/{thread_id}", json={"title": blank})
+            assert response.status_code == 422
+        too_long = await client.patch(f"/api/threads/{thread_id}", json={"title": "x" * 101})
+        assert too_long.status_code == 422
+        missing = await client.patch(f"/api/threads/{uuid4()}", json={"title": "Gone"})
+        assert missing.status_code == 404
+
+
+async def test_title_names_the_first_exchange_once_it_has_a_reply(approval_app, monkeypatch):
+    prompts = []
+    titler = FakeListChatModel(responses=['"Example service restart."'])
+    original = FakeListChatModel._call
+
+    def call(self, messages, *args, **kwargs):
+        prompts.append(messages[-1].content)
+        return original(self, messages, *args, **kwargs)
+
+    async def title_of(client, thread_id):
+        for _ in range(100):
+            row = (await client.get(f"/api/threads/{thread_id}")).json()
+            if row["title_source"]:
+                break
+            await asyncio.sleep(0.01)
+        return row["title"], row["title_source"]
+
+    monkeypatch.setattr(FakeListChatModel, "_call", call)
+    monkeypatch.setattr("argus.api.app._build_model", lambda *_: titler)
+    history = InMemoryHistory()
+    app, _docker = approval_app(history=history, generate_titles=True)
+    async with client_for(app) as client:
+        thread_id = (await client.post("/api/threads")).json()["id"]
+        # The run stops at the approval with no reply yet, so there is nothing to name.
+        (interrupt,) = pending_interrupts(await run_agent(client, run_input(thread_id)))
+        assert await title_of(client, thread_id) == ("Restart example-service.", None)
+        assert prompts == []
+
+        payload = run_input(thread_id, resume=[answer(interrupt, "approve")])
+        payload["messages"] = []
+        await run_agent(client, payload)
+        assert await title_of(client, thread_id) == ("Example service restart", "generated")
+        (prompt,) = prompts
+        assert "Restart example-service." in prompt
+        assert "Finished reviewing the operation." in prompt
+
+        # Later runs keep it, without asking the model again.
+        await run_agent(client, run_input(thread_id))
+        await asyncio.sleep(0.05)
+        assert len(prompts) == 1

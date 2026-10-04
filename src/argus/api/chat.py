@@ -15,14 +15,32 @@ from ag_ui.core import (
 from ag_ui.encoder import EventEncoder
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel, Field
 
 from argus.agent.api import ArgusAgent
 from argus.agent.history import archive_messages
 from argus.agent.identity import AUTHOR_KEY
-from argus.db.history import HistoryRepository
+from argus.agent.titles import MAX_LENGTH, TitleWriter
+from argus.db.history import TIME_KEY, HistoryRepository
 
 
-def add_chat_routes(app: FastAPI, agent: ArgusAgent, history: HistoryRepository | None) -> None:
+class Rename(BaseModel):
+    title: str = Field(min_length=1, max_length=MAX_LENGTH)
+
+
+def message_text(content) -> str | None:
+    """A message's text: the string itself, or its text parts beside attachments."""
+    if isinstance(content, list):
+        content = " ".join(part.text for part in content if getattr(part, "type", None) == "text")
+    return " ".join(content.split()) if isinstance(content, str) else None
+
+
+def add_chat_routes(
+    app: FastAPI,
+    agent: ArgusAgent,
+    history: HistoryRepository | None,
+    titles: TitleWriter | None = None,
+) -> None:
     # Threads with a run stream open in this process. A checkpoint that stopped partway is
     # only stalled when its thread is not here; after a restart this set is empty.
     running: set[str] = set()
@@ -50,9 +68,10 @@ def add_chat_routes(app: FastAPI, agent: ArgusAgent, history: HistoryRepository 
                 raise HTTPException(422, "threadId must be a UUID.") from None
             input_data.thread_id = str(thread_id)
             first_user = next((m for m in input_data.messages if m.role == "user"), None)
-            content = first_user.content if first_user else None
-            title = " ".join(content.split())[:100] if isinstance(content, str) else None
-            await history.touch_thread(thread_id, title or None)
+            text = message_text(first_user.content) if first_user else None
+            await history.touch_thread(thread_id, text[:MAX_LENGTH] if text else None)
+            # Archive the operator's message now, so it is stamped when it was sent.
+            await archive_messages(history, thread_id, input_data.messages)
 
         encoder = EventEncoder(accept=request.headers.get("accept"))
         request_agent = agent.clone()
@@ -64,6 +83,8 @@ def add_chat_routes(app: FastAPI, agent: ArgusAgent, history: HistoryRepository 
                     yield event
             finally:
                 running.discard(input_data.thread_id)
+                if titles is not None and thread_id is not None:
+                    titles.start(thread_id)  # after the run, so it can read the reply
 
         async def run_events():
             async for event in request_agent.run(input_data):
@@ -101,6 +122,16 @@ def add_chat_routes(app: FastAPI, agent: ArgusAgent, history: HistoryRepository 
             raise HTTPException(404, "Conversation not found.")
         return result
 
+    @app.patch("/api/threads/{thread_id}")
+    async def rename_thread(thread_id: UUID, body: Rename):
+        store = require_history()
+        title = " ".join(body.title.split())
+        if not title:
+            raise HTTPException(422, "A title needs some text.")
+        if not await store.rename_thread(thread_id, title):
+            raise HTTPException(404, "Conversation not found.")
+        return await store.get_thread(thread_id)
+
     @app.delete("/api/threads/{thread_id}", status_code=204)
     async def delete_thread(thread_id: UUID):
         if not await require_history().delete_thread(thread_id):
@@ -122,7 +153,11 @@ def add_chat_routes(app: FastAPI, agent: ArgusAgent, history: HistoryRepository 
         # Preserve chat messages that are no longer in the model's summarized context.
         archived = await store.chat_messages(thread_id)
         messages = {m["id"]: m for m in archived}
-        messages.update({m.id: m for m in current})
+        for message in current:
+            # The checkpoint's copy is current, but only the archive knows when it was sent.
+            if at := (messages.get(message.id, {}).get("metadata") or {}).get(TIME_KEY):
+                message.metadata = {**(message.metadata or {}), TIME_KEY: at}
+            messages[message.id] = message
         encoder = EventEncoder(accept=request.headers.get("accept"))
         events = [
             RunStartedEvent(type=EventType.RUN_STARTED, thread_id=str(thread_id), run_id=run_id),

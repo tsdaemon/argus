@@ -1,5 +1,7 @@
 """One behaviour suite for every `HistoryRepository`: the in-memory fake and `SqlHistory`."""
 
+import asyncio
+from datetime import datetime
 from uuid import uuid4
 
 import pytest
@@ -39,6 +41,30 @@ async def test_touch_keeps_the_first_title_and_creates_unknown_threads(history):
     assert (await history.get_thread(external))["title"] == "From elsewhere"
 
 
+async def test_generated_title_replaces_only_the_placeholder(history):
+    thread_id = await history.create_thread()
+    await history.touch_thread(thread_id, "can you check why the nas is slow today")
+    assert (await history.get_thread(thread_id))["title_source"] is None
+
+    assert await history.set_generated_title(thread_id, "Slow NAS")
+    assert not await history.set_generated_title(thread_id, "Something else")
+    row = await history.get_thread(thread_id)
+    assert (row["title"], row["title_source"]) == ("Slow NAS", "generated")
+    assert not await history.set_generated_title(uuid4(), "Missing")
+
+
+async def test_operator_title_wins_over_generation(history):
+    thread_id = await history.create_thread()
+    await history.touch_thread(thread_id, "first message")
+
+    assert await history.rename_thread(thread_id, "My NAS notes")
+    assert not await history.set_generated_title(thread_id, "Generated")
+    await history.touch_thread(thread_id, "later message")
+    row = await history.get_thread(thread_id)
+    assert (row["title"], row["title_source"]) == ("My NAS notes", "user")
+    assert not await history.rename_thread(uuid4(), "Missing")
+
+
 async def test_chat_messages_upsert_in_first_seen_order(history):
     thread_id = await history.create_thread()
     await history.save_chat_messages(
@@ -61,6 +87,24 @@ async def test_chat_messages_upsert_in_first_seen_order(history):
     assert [m["id"] for m in saved] == ["first", "second", "third"]
     assert saved[1]["content"] == "Finished answer"
     assert await history.chat_messages(await history.create_thread()) == []
+
+
+async def test_chat_messages_keep_the_time_they_were_first_saved(history):
+    thread_id = await history.create_thread()
+    await history.save_chat_messages(
+        thread_id, [{"id": "reply", "role": "assistant", "content": "Partial"}]
+    )
+    (first,) = await history.chat_messages(thread_id)
+    await asyncio.sleep(0.01)
+    await history.save_chat_messages(
+        thread_id,
+        [{"id": "reply", "role": "assistant", "content": "Done", "metadata": {"other": 1}}],
+    )
+    (updated,) = await history.chat_messages(thread_id)
+
+    sent = datetime.fromisoformat(first["metadata"]["argus_time"])
+    assert sent.tzinfo is not None
+    assert updated["metadata"] == {"other": 1, "argus_time": first["metadata"]["argus_time"]}
 
 
 async def test_delete_removes_only_that_thread(history):

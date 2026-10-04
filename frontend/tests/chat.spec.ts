@@ -122,6 +122,42 @@ test("a conversation can be deleted after confirming, and stays deleted", async 
   await expect(page.locator(".thread-row", { hasText: "Delete me please" })).toHaveCount(0);
 });
 
+test("a conversation can be renamed, and the title stays", async ({ page }) => {
+  await start(page);
+  await send(page, "Name me later");
+  await expect(page.getByText("Read-only review complete: Name me later", { exact: true })).toBeVisible();
+  const row = page.locator(".thread-row", { hasText: "Name me later" });
+
+  await row.getByRole("button", { name: "Rename conversation" }).click();
+  await page.getByRole("textbox", { name: "Conversation title" }).press("Escape");
+  await expect(row).toHaveCount(1);
+
+  await row.getByRole("button", { name: "Rename conversation" }).click();
+  await page.getByRole("textbox", { name: "Conversation title" }).fill("Router uptime notes");
+  await page.getByRole("textbox", { name: "Conversation title" }).press("Enter");
+  const renamed = page.locator(".thread-row", { hasText: "Router uptime notes" });
+  await expect(renamed).toHaveCount(1);
+
+  await send(page, "One more question");
+  await expect(page.getByText("Read-only review complete: One more question", { exact: true })).toBeVisible();
+  await page.reload();
+  await expect(page.locator(".thread-row", { hasText: "Router uptime notes" })).toHaveCount(1);
+});
+
+test("messages show their day once and their time, also after a reload", async ({ page }) => {
+  await start(page);
+  await send(page, "First timed question");
+  await expect(page.getByText("Read-only review complete: First timed question", { exact: true })).toBeVisible();
+  await send(page, "Second timed question");
+  await expect(page.getByText("Read-only review complete: Second timed question", { exact: true })).toBeVisible();
+  for (const _ of [0, 1]) {
+    await expect(page.getByRole("separator").filter({ hasText: "Today" })).toHaveCount(1);
+    await expect(page.locator(".message-time")).toHaveCount(4);
+    await expect(page.locator(".message-time").first()).toHaveText(/^\d{1,2}:\d{2}/);
+    await page.reload();
+  }
+});
+
 test("a tool call shows its key arguments and classification", async ({ page }) => {
   await start(page);
   await send(page, "What is the router uptime?");

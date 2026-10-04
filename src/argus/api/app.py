@@ -20,7 +20,8 @@ from langgraph.checkpoint.base import BaseCheckpointSaver
 from argus.a2a.server import add_a2a_routes
 from argus.agent.api import build_agent
 from argus.agent.cost import CostRecorder
-from argus.agent.graph import build_graph
+from argus.agent.graph import _build_model, build_graph
+from argus.agent.titles import TitleWriter
 from argus.agent.tracing import setup_tracing
 from argus.api.auth import add_auth
 from argus.api.chat import add_chat_routes
@@ -52,6 +53,7 @@ def build_app(
     tokens: TokenRepository | None = None,
     a2a: A2ARepository | None = None,
     resources: Callable[[], AbstractAsyncContextManager[None]] | None = None,
+    generate_titles: bool = False,
 ) -> FastAPI:
     # FastMCP's app needs its own lifespan forwarded into the parent FastAPI
     # constructor (an internal task group otherwise never starts), so it must exist
@@ -118,7 +120,20 @@ def build_app(
         checkpointer=checkpointer,
         cost_recorder=cost_recorder,
     )
-    add_chat_routes(app, agui_agent, history)
+    # Off by default so tests never call a model for titles; `create_app` turns it on.
+    titles = None
+    if generate_titles and history is not None:
+        # The planner model with as little reasoning as it allows: a label needs none, and
+        # left to themselves models spent thousands of reasoning tokens (10-30 s) on one.
+        # Some refuse to turn reasoning off (Gemini) and some ignore "minimal" (Qwen).
+        title_model = _build_model(config.agent, config.agent.model, cost_recorder)
+        titles = TitleWriter(
+            title_model.bind(extra_body={"reasoning": {"enabled": False}}).with_fallbacks(
+                [title_model.bind(extra_body={"reasoning": {"effort": "minimal"}})]
+            ),
+            history,
+        )
+    add_chat_routes(app, agui_agent, history, titles)
     if config.a2a.enabled:
         unattended_graph = build_graph(
             config=config.agent, providers=providers, provider_settings=provider_settings,
@@ -201,4 +216,5 @@ def create_app() -> FastAPI:
         resources=resources,
         tokens=SqlTokens(engine),
         a2a=SqlA2A(engine),
+        generate_titles=True,
     )

@@ -23,12 +23,16 @@ button:focus-visible, a:focus-visible { outline: 3px solid var(--accent-light); 
 .thread-list { flex: 1; overflow-y: auto; min-height: 0; }
 .thread-list button { width: 100%; text-align: left; padding: 12px; border: 0; border-radius: 7px; background: transparent; color: var(--ag-muted); margin: 3px 0; }
 .thread-row { position: relative; display: flex; align-items: center; }
-.thread-row .thread-select { flex: 1; min-width: 0; margin: 3px 0; padding-right: 40px; }
+.thread-row .thread-select { flex: 1; min-width: 0; margin: 3px 0; }
+/* Room for the row actions on the title line only, so the date and cost keep the full width. */
+.thread-row .thread-select > span { padding-right: 60px; }
 .thread-list button:hover:not(:disabled), .thread-list button[aria-current] { background: var(--raised); color: var(--cream); }
 .thread-list button[aria-current] { box-shadow: inset 2px 0 0 var(--ag-accent); }
 .thread-list button span { display: block; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.thread-list .thread-delete { position: absolute; right: 6px; top: 50%; transform: translateY(-50%); display: grid; place-items: center; width: 30px; height: 30px; margin: 0; padding: 0; opacity: 0; }
-.thread-row:hover .thread-delete, .thread-row:focus-within .thread-delete { opacity: 1; }
+.thread-list .thread-action { position: absolute; right: 6px; top: 10px; display: grid; place-items: center; width: 30px; height: 30px; margin: 0; padding: 0; opacity: 0; }
+.thread-list .thread-edit { right: 38px; }
+.thread-row:hover .thread-action, .thread-row:focus-within .thread-action { opacity: 1; }
+.thread-rename { flex: 1; min-width: 0; margin: 3px 0; padding: 10px; border: 1px solid var(--ag-accent); border-radius: 7px; background: var(--raised); color: var(--cream); font: inherit; font-size: 13px; }
 .thread-list .thread-delete:hover:not(:disabled) { color: #ff9b8a; background: #2a1512; }
 .thread-confirm { flex: 1; display: flex; align-items: center; gap: 6px; padding: 8px 10px; margin: 3px 0; border: 1px solid #4a2a24; border-radius: 7px; background: #1a0f0d; font-size: 12px; color: var(--text); }
 .thread-confirm span { flex: 1; min-width: 0; }
@@ -138,8 +142,10 @@ main { flex: 1; min-width: 0; display: flex; flex-direction: column; background:
   .new-chat { margin: 0; font-size: 11px; padding: 8px; }
   .thread-list { grid-column: 1 / -1; display: flex; gap: 6px; overflow-x: auto; }
   .thread-row { flex-shrink: 0; }
-  .thread-list .thread-select { width: auto; min-width: 130px; max-width: 200px; padding: 8px 36px 8px 8px; }
-  .thread-list .thread-delete { opacity: 1; }
+  .thread-list .thread-select { width: auto; min-width: 130px; max-width: 200px; padding: 8px; }
+  .thread-list .thread-action { top: 6px; }
+  .thread-list .thread-action { opacity: 1; }
+  .thread-rename { width: 200px; flex: none; }
   .thread-meta { display: none; }
   main { min-height: 0; }
 }
@@ -166,3 +172,12 @@ main { flex: 1; min-width: 0; display: flex; flex-direction: column; background:
   .conversation-tabs { margin: 0; grid-column: 1 / -1; }
   .sidebar[data-collapsed] .conversation-tabs { display: flex; }
 }
+
+.day-divider { display: flex; align-items: center; gap: 12px; margin: 18px 0 10px; color: var(--ag-muted); font-size: 11px; letter-spacing: 0.04em; }
+.day-divider::before, .day-divider::after { content: ""; flex: 1; border-top: 1px solid var(--line); }
+.message-time { display: block; width: fit-content; margin: 0 4px -2px; color: var(--ag-muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+.message-time[data-align="end"] { margin-left: auto; }
+.assistant-turn .message-time + .copilotKitAssistantMessage .cpk\:prose > div > :first-child { margin-top: 4px; }
+.message-header { display: flex; justify-content: flex-end; align-items: baseline; gap: 8px; margin: 0 0 6px; }
+.message-header .message-author { margin: 0; }
+.message-header .message-time { margin: 0; }

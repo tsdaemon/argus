@@ -17,6 +17,7 @@ from google.protobuf.json_format import MessageToDict, ParseDict
 from argus.db.a2a import interrupted, owner, task_page
 from argus.db.admin import AdminAccount
 from argus.db.breakglass import PENDING, BreakGlassRequest
+from argus.db.history import with_time
 from argus.db.tokens import ApiToken, now
 
 
@@ -60,7 +61,8 @@ class InMemoryHistory:
 
     def _with_author(self, thread):
         first = next(
-            (m for m in self._messages.get(thread["id"], {}).values() if m["role"] == "user"), {}
+            (m for m, _ in self._messages.get(thread["id"], {}).values() if m["role"] == "user"),
+            {},
         )
         author = (first.get("metadata") or {}).get("argus_author")
         external = bool(author and author.get("kind") == "agent")
@@ -70,6 +72,19 @@ class InMemoryHistory:
             "author": author if external else None,
         }
 
+    async def rename_thread(self, thread_id: uuid.UUID, title: str) -> bool:
+        if thread_id not in self._threads:
+            return False
+        self._threads[thread_id] |= {"title": title, "title_source": "user"}
+        return True
+
+    async def set_generated_title(self, thread_id: uuid.UUID, title: str) -> bool:
+        thread = self._threads.get(thread_id)
+        if thread is None or thread["title_source"] is not None:
+            return False
+        thread |= {"title": title, "title_source": "generated"}
+        return True
+
     async def delete_thread(self, thread_id: uuid.UUID) -> bool:
         self._messages.pop(thread_id, None)
         return self._threads.pop(thread_id, None) is not None
@@ -77,10 +92,12 @@ class InMemoryHistory:
     async def save_chat_messages(self, thread_id: uuid.UUID, messages: list) -> None:
         stored = self._messages.setdefault(thread_id, {})
         for message in messages:
-            stored[message["id"]] = message  # an update keeps the original position
+            # An update keeps the original position and time.
+            at = stored[message["id"]][1] if message["id"] in stored else datetime.now(UTC)
+            stored[message["id"]] = (message, at)
 
     async def chat_messages(self, thread_id: uuid.UUID) -> list:
-        return list(self._messages.get(thread_id, {}).values())
+        return [with_time(m, at) for m, at in self._messages.get(thread_id, {}).values()]
 
     async def add_cost(self, thread_id: uuid.UUID, usd: float) -> None:
         if thread_id in self._threads:
@@ -94,6 +111,7 @@ class InMemoryHistory:
         self._threads[thread_id] = {
             "id": thread_id,
             "title": title,
+            "title_source": None,
             "created_at": now,
             "updated_at": now,
             "cost_usd": 0.0,

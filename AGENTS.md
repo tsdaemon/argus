@@ -64,6 +64,7 @@ are base dependencies in `pyproject.toml`.
 | Break-glass provider; its Postgres repository | `src/argus/providers/breakglass_provider.py`, `src/argus/db/breakglass.py` |
 | Break-glass web routes + shared admin authentication | `src/argus/mcp/webapp.py`, `src/argus/webauth.py` |
 | argus's own HTML pages (login, break-glass): Jinja templates on one base | `src/argus/webpages.py`, `src/argus/templates/` |
+| Generated conversation titles (planner model, reasoning off or minimal, after the first reply) | `src/argus/agent/titles.py` |
 | Per-thread model spend (callback on the chat models); Phoenix backfill | `src/argus/agent/cost.py`, `src/argus/agent/phoenix_costs.py` |
 | ntfy push notifications | `src/argus/notify/` |
 | SSH launcher (named hosts); the host-side script lives in autohome | `src/argus/launcher/ssh.py` |
@@ -220,6 +221,11 @@ the app without an admin repository get an open app on purpose.
   Endpoint scheme picks the protocol: `http://host:6006/v1/traces` (HTTP) or `http://host:4317` (gRPC).
   The deployed Phoenix requires a login (`PHOENIX_ENABLE_AUTH`); argus exports with its admin
   secret as `PHOENIX_API_KEY`, which `phoenix.otel` sends as a bearer token. Local Phoenix stays open.
+- **The operator's title wins.** `threads.title_source` is null while the title is the first
+  message's opening; `TitleWriter` replaces only that (once, as `generated`), and a rename
+  through `PATCH /api/threads/{id}` sets `user`, which nothing overwrites. Title generation is
+  off in `build_app` unless `generate_titles=True` (as `create_app` passes), so tests make no
+  model calls for it.
 - **argus counts spend itself; Phoenix is not the source.** `CostRecorder` adds each call's
   OpenRouter `usage.cost` to `threads.cost_usd`, so the UI shows spend with tracing off.
   `python -m argus.agent.phoenix_costs` only backfills threads from before it existed.
@@ -241,7 +247,8 @@ the app without an admin repository get an open app on purpose.
 - Local startup uses `task deps:up`, **`task backend:migrate`**, `task frontend:build`, then
   `task backend:dev`. Locally migrations are a task step; the container runs them on start. The default local
   config is `examples/argus.dev.yaml`, with private workspace `.argus/workspace` and
-  Docker tools scoped to `argus-live-a` and `argus-live-b`. Local
+  Docker tools scoped to `argus-live-a` and `argus-live-b`. It runs both agent models on the cheap
+  `qwen/qwen3.7-flash`; model behaviour worth trusting is checked on the deployed models. Local
   development has that one config; do not add per-developer copies. Keep the workspace on the host for live inspection.
 - UI setup: Node 24, `task frontend:install`, `task frontend:build`; the Python service
   serves the result at `/`. `task frontend:dev` runs Vite with an API proxy to port 8421.
@@ -251,7 +258,11 @@ the app without an admin repository get an open app on purpose.
   Open port 5173 for frontend live reload; no frontend build is needed. The agent process runs
   under `uvicorn --reload` and restarts on changes to `src/` or the dev config (`mprocs.yaml`). It uses the same single dev config. Quitting mprocs leaves dependencies running.
 - `task frontend:test` runs Playwright against a real API/graph with in-memory history and
-  checkpoint stores and deterministic model/Docker fakes; no database is needed. Install
+  checkpoint stores and deterministic model/Docker fakes; no database is needed.
+  `tests/visual.spec.ts` adds screenshot comparisons of single elements (rows, cards, the
+  rail) against images in `frontend/tests/__screenshots__/`, one set per platform. Use them
+  for UI changes. After an intended visual change run `task frontend:test:update` and look
+  at the changed images before committing them. Install
   Chromium with `cd frontend && npx playwright install chromium`, and build the UI first.
 - Tests must not require a real Postgres. Routes depend on `HistoryRepository` (`argus.db.history`);
   use `tests.fakes.InMemoryHistory` and `InMemorySaver`. `tests/db/` runs one contract suite against
