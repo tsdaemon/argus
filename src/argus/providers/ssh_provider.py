@@ -123,6 +123,11 @@ class SshProvider:
                 proc.kill()
                 await proc.wait()
                 timed_out = True
+            except asyncio.CancelledError:
+                # The run was stopped: stop the client too, which hangs up a `-tt` command.
+                proc.kill()
+                output.cancel()
+                raise
             stdout, stderr = await output
             result = _format_result(proc.returncode, stdout, stderr)
             if timed_out:

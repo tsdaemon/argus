@@ -1654,3 +1654,39 @@ follows its text, and the header beside it is right-aligned, so the author moved
 pixels. "an exchange with its day divider and times" hid the same drift behind
 `maxDiffPixelRatio: 0.01`. Both now set every `.message-time` to `12:00` before the
 screenshot instead of masking it, with no tolerance. Playwright: 24 passed, twice.
+
+### 2026-10-07 — Stop and reject; ssh on theseus
+
+Task: "Argus: allow cancelling execution while a tool call is pending".
+
+- **Reject.** HITL's rejection let the model retry or work around the refusal at once.
+  `ApprovalOutcomeMiddleware` now gives the turn after a rejection no tools
+  (`tool_choice="none"`, and any call the model makes anyway is dropped): it can only answer.
+  Rejects without a reason get `REJECT_REASON` (don't retry; explain; ask or propose).
+- **Stop at an approval.** The card has "Stop run" (CopilotKit's `cancel`). The cancelled
+  interrupt rejects every action with `STOP_REASON`; the middleware answers the step's other
+  calls as stopped, adds "Stopped by the operator." and ends the run. Inside the worker, the
+  planner sees that as the task result and ends too.
+- **Stop mid-run.** The chat's stop button aborted the stream, which showed "Run failed:
+  BodyStreamBuffer was aborted", left the `ssh` client running, and left a stalled checkpoint
+  that auto-resumed (re-running a read) on reload. Now `ArgusHttpAgent.abortRun` also posts
+  `/api/threads/{id}/stop`, which waits for the run to wind down and closes the checkpoint as
+  stopped (`ArgusAgent.stop`, an update as the last after-model node, so `next` is empty);
+  the UI then reconnects to show it. `ssh_run` kills its client on cancellation.
+- Tool cards show `stopped` and `rejected`. Messages argus makes get their own IDs (the history
+  archive is keyed by them; `None` IDs collapsed into one row).
+- **theseus over ssh.** autohome role `argus_ssh` (applied to theseus): account `argus`,
+  groups docker/systemd-journal/adm, `/etc/sudoers.d/argus` NOPASSWD, the `argus_ssh` key.
+  Host `theseus` added to both configs (`${THESEUS_IP}`, user `argus`); its host key was
+  already pinned.
+- Screenshot tests: the conversation-row time is pinned like the others. The approval-card
+  screenshot was removed: it flaked on half-pixel scroll positions, and `chat.spec.ts` covers
+  the card's behaviour.
+
+Verified: pytest 338 passed, 27 skipped (no Postgres); new tests cover reject (next turn
+`tool_choice="none"`, retry dropped), stop at an approval (planner and worker), `/stop`, and
+`ssh_run` killing its client on cancel. Playwright: new tests for stopping at an approval and
+mid-tool (no auto-resume after reload); 25 passed. Real services: ssh to `argus@theseus` with the
+pinned key (groups, `sudo -n`, docker, journal); `ssh_run` with the real jev classifier on
+theseus: `docker ps | wc -l` → read, ran; `sudo touch`/`rm` → mutate, run directly as if
+approved. Not checked: the deployed argus (not redeployed) and an approval in the live UI.

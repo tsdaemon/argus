@@ -38,8 +38,9 @@ class BrowserModel(ToolCallingModel):
             raise RuntimeError("The model provider is unavailable")
         if results:
             response = AIMessage(content=f"Operation reviewed. {results[-1].content}")
-        elif "uptime" in question.lower():
-            args = {"host": "router", "command": "uptime"}
+        elif "uptime" in question.lower() or "slow" in question.lower():
+            command = "sleep 30" if "slow" in question.lower() else "uptime"
+            args = {"host": "router", "command": command}
             response = AIMessage(
                 content="",
                 tool_calls=[{"name": "ssh_run", "args": args, "id": "uptime", "type": "tool_call"}],
@@ -86,6 +87,18 @@ async def serve():
     ssh.wait = AsyncMock(return_value=0)
     ssh.stdout.read = AsyncMock(return_value=b" 23:42:15 up 3:07,  load average: 0.10\r\n")
     ssh.stderr.read = AsyncMock(return_value=b"")
+    # `sleep` runs until the call is cancelled, like a command still working on the host.
+    slow = MagicMock(returncode=None)
+
+    async def forever():
+        await asyncio.sleep(3600)
+
+    slow.wait = forever
+    slow.stdout.read = AsyncMock(return_value=b"")
+    slow.stderr.read = AsyncMock(return_value=b"")
+
+    async def ssh_process(*argv, **_):
+        return slow if "sleep 30" in argv else ssh
     with (
         tempfile.TemporaryDirectory(prefix="argus-ui-") as workspace,
         patch(
@@ -96,7 +109,7 @@ async def serve():
         ),
         patch("argus.providers.docker_provider.docker.DockerClient", lambda **_: docker),
         patch("argus.providers.ssh_provider.build_classifier", lambda *_, **__: ReadClassifier()),
-        patch("asyncio.create_subprocess_exec", AsyncMock(return_value=ssh)),
+        patch("asyncio.create_subprocess_exec", ssh_process),
     ):
         config = ArgusConfig(
             agent=AgentConfig(workspace_root=workspace),

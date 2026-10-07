@@ -55,6 +55,14 @@ providers:
       type: jev
       api_key: ${OPENROUTER_API_KEY}
     hosts:
+      theseus:
+        host: ${THESEUS_IP}
+        user: argus
+        description: >-
+          Theseus, the home NAS (Ubuntu, ZFS storage) and Docker host for the home services
+          (an Ansible-NAS fork). Account `argus`: docker group and passwordless sudo, for full
+          host administration. argus itself runs here in Docker, so restarting the argus
+          container, Docker, or the host ends the current run.
       router:
         host: 192.168.0.1
         port: ${ARGUS_ROUTER_SSH_PORT}

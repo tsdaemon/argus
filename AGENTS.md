@@ -92,11 +92,19 @@ LangChain tool names replace dots with underscores (`docker_restart_container`).
   `interrupt_on` by `langchain_bind`. It permits approve/reject decisions. `agent/api.py`
   exposes pending interrupts in the native AG-UI `RUN_FINISHED.outcome` and translates
   `resume[]` responses into LangGraph decisions keyed by interrupt ID. Validate responses
-  before checkpointing them; cancellation rejects the pending actions. The agent's policy
-  instance needs no `ApprovalBackend` because it only calls `.decide()`.
+  before checkpointing them. `ApprovalOutcomeMiddleware` (`agent/approvals.py`) decides what
+  follows: after a rejection the model's next turn has no tools (`tool_choice="none"`, stray
+  calls dropped), so it can only answer; a cancelled interrupt (the approval card's "Stop run")
+  rejects every action with `STOP_REASON` and ends the run without another model call, also
+  from inside the worker. Stopping a run mid-tool is the chat's stop button: the dropped stream
+  cancels the run (and kills an `ssh` client), then `POST /api/threads/{id}/stop` closes the
+  checkpoint (`ArgusAgent.stop`) so it does not read as stalled and auto-resume. The agent's
+  policy instance needs no `ApprovalBackend` because it only calls `.decide()`.
 - **Per-call classification** is for a tool whose risk depends on its arguments: `ssh.run`
   (agent and MCP name `ssh_run`) runs any shell command on a host named under the `ssh`
-  provider's `hosts` (the router as its root `admin` user, the Home Assistant OS host as root). Top-level settings are defaults a
+  provider's `hosts` (theseus as `argus` with the docker group and passwordless sudo, the router
+  as its root `admin` user, the Home Assistant OS host as root). The theseus account comes from
+  autohome's `argus_ssh` role; argus's approval flow, not the account, limits what it does. Top-level settings are defaults a
   host overrides, as in the launcher; each host has its own classifier, whose context is the
   host's name, `user@address`, and `description`. Commands run with `ssh -tt` (host option `tty`, default true) so that stopping the
   client on timeout hangs up the command on the host (BusyBox hosts such as the router and HAOS may have no `timeout`).
@@ -282,8 +290,8 @@ the app without an admin repository get an open app on purpose.
 - `OPENROUTER_API_KEY` populates `agent.api_key` and the `ssh` provider's classifier key
   through YAML expansion.
 - SSH keys live in the gitignored `.ssh/`: `argus_launcher` is break-glass only, `argus_ssh`
-  is direct access (the router and Home Assistant OS host), kept apart so widening direct access never widens
-  break-glass. Both hosts' keys are pinned in `.ssh/known_hosts` (HAOS: `[192.168.0.100]:22222`).
+  is direct access (theseus, the router, and the Home Assistant OS host), kept apart so widening direct access never widens
+  break-glass. All hosts' keys are pinned in `.ssh/known_hosts` (HAOS: `[192.168.0.100]:22222`).
 - `ARGUS_AGENT_DATABASE_URL` supplies the example config and Alembic connection URL;
   `POSTGRES_PASSWORD` configures Compose's Postgres. The Taskfile's top-level `env`
   supplies the local database URL to every task, including mprocs's child processes.

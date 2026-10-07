@@ -5,7 +5,7 @@ type Action = { name: string; args: unknown; description?: string };
 type Review = { allowed_decisions: string[] };
 type Request = { action_requests: Action[]; review_configs: Review[] };
 
-export function Approvals({ interrupts, resolve }: InterruptRenderProps) {
+export function Approvals({ interrupts, resolve, cancel }: InterruptRenderProps) {
   const [decisions, setDecisions] = useState<Record<string, "approve" | "reject">>({});
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
@@ -38,6 +38,18 @@ export function Approvals({ interrupts, resolve }: InterruptRenderProps) {
     }
   }
 
+  // Rejects every pending action; the server then ends the run without asking the model again.
+  async function stop() {
+    setSubmitting(true);
+    setError("");
+    try {
+      for (const { id } of requests) await cancel(id);
+    } catch {
+      setError("Could not stop the run. Reload this conversation to check what is still pending.");
+      setSubmitting(false);
+    }
+  }
+
   return <section className="approval" aria-label="Tool approval">
     <div className="eyebrow">Your decision</div>
     <h2>Review before argus acts</h2>
@@ -59,8 +71,11 @@ export function Approvals({ interrupts, resolve }: InterruptRenderProps) {
       </fieldset>)}
     </div>)}
     {error && <p role="alert">{error}</p>}
-    <button className="primary" disabled={!ready || submitting} onClick={() => void submit()}>
-      {submitting ? "Submitting…" : "Submit decisions"}
-    </button>
+    <div className="approval-actions">
+      <button className="primary" disabled={!ready || submitting} onClick={() => void submit()}>
+        {submitting ? "Submitting…" : "Submit decisions"}
+      </button>
+      <button type="button" disabled={submitting} onClick={() => void stop()}>Stop run</button>
+    </div>
   </section>;
 }

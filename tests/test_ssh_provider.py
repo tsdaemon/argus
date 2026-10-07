@@ -172,6 +172,22 @@ async def test_a_command_past_its_timeout_is_stopped_and_returns_its_output_so_f
 
 
 @pytest.mark.asyncio
+async def test_a_stopped_run_stops_its_command():
+    proc = fake_process(hang=True)
+
+    with patch("asyncio.create_subprocess_exec", new=AsyncMock(return_value=proc)):
+        call = asyncio.ensure_future(
+            run_spec().fn(host="router", command="sleep 60", ctx=None, timeout_seconds=60)
+        )
+        await asyncio.sleep(0.01)
+        call.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await call
+
+    proc.kill.assert_called_once()
+
+
+@pytest.mark.asyncio
 async def test_a_call_can_ask_for_a_longer_timeout_up_to_the_hosts_maximum():
     spec = run_spec(timeout_seconds=0.01, max_timeout_seconds=0.05)
     proc = fake_process(hang=True)

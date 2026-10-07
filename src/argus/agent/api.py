@@ -25,6 +25,13 @@ from langchain_core.messages import AIMessage, ToolMessage
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.types import Command
 
+from argus.agent.approvals import (
+    REJECT_REASON,
+    STOP_NODE,
+    STOP_REASON,
+    stopped_call,
+    stopped_message,
+)
 from argus.agent.classification import METADATA_KEY, stored_classification
 from argus.agent.cost import CostRecorder
 from argus.agent.graph import build_graph
@@ -91,6 +98,28 @@ class ArgusAgent(LangGraphAgent):
                 tool_class = self.tool_classes.get(call["name"], ToolClass.READ)
             pending.append({"name": call["name"], "args": call["args"], "class": tool_class.value})
         return {"stalled": True, "pending": pending}
+
+    async def stop(self, thread_id: str) -> bool:
+        """End the thread's unfinished run where it stands: its unanswered calls, a pending
+        approval's included, are answered as stopped and nothing more runs, so the thread
+        does not read as stalled. False when there was no unfinished run."""
+        config = {"configurable": {"thread_id": thread_id}}
+        state = await self.graph.aget_state(config)
+        if not state.next:
+            return False
+        messages = (state.values or {}).get("messages", [])
+        answered = {m.tool_call_id for m in messages if isinstance(m, ToolMessage)}
+        last_ai = next((m for m in reversed(messages) if isinstance(m, AIMessage)), None)
+        stopped = [
+            stopped_call(c)
+            for c in (last_ai.tool_calls if last_ai else [])
+            if c["id"] not in answered
+        ]
+        # As the last after-model step, whose routing ends a turn without tool calls.
+        await self.graph.aupdate_state(
+            config, {"messages": [*stopped, stopped_message()]}, as_node=STOP_NODE
+        )
+        return True
 
     async def thread_snapshot(self, thread_id: str) -> tuple[list, list[Interrupt]]:
         """Read a checkpoint without starting a run or executing pending tools."""
@@ -165,7 +194,8 @@ class ArgusAgent(LangGraphAgent):
                 raise _InvalidApproval("This interrupt does not contain tool approval requests.")
 
             if entry.status == "cancelled":
-                decisions = [{"type": "reject", "message": "Approval cancelled."} for _ in reviews]
+                # Stopping the run: nothing in this step runs and the model is not called again.
+                decisions = [{"type": "reject", "message": STOP_REASON} for _ in reviews]
             else:
                 payload = entry.payload
                 decisions = payload.get("decisions") if isinstance(payload, dict) else None
@@ -180,7 +210,11 @@ class ArgusAgent(LangGraphAgent):
                     raise _InvalidApproval(
                         "Use an allowed approve or reject decision for each action."
                     )
-            responses[entry.interrupt_id] = {"decisions": decisions}
+            responses[entry.interrupt_id] = {"decisions": [
+                {**d, "message": REJECT_REASON} if d["type"] == "reject" and not d.get("message")
+                else d
+                for d in decisions
+            ]}
 
         return Command(resume=responses)
 

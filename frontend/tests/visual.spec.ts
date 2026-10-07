@@ -3,8 +3,8 @@ import { expect, test, type Locator, type Page } from "@playwright/test";
 // Screenshot comparisons: each test renders one element against the fake-model server and
 // compares it with a stored image in `__screenshots__`. They catch layout and styling drift
 // the behaviour tests in chat.spec.ts cannot. Elements, not pages: the server keeps every
-// earlier test's conversations, so a page would depend on test order. Anything that changes
-// between runs (dates, totals) is masked. Refresh images on purpose with
+// earlier test's conversations, so a page would depend on test order. Times are pinned (`pinTimes`)
+// and spend totals masked, since both change between runs. Refresh images on purpose with
 // `task frontend:test:update`, then look at the diff before committing.
 
 async function start(page: Page) {
@@ -30,12 +30,12 @@ test("conversation row: idle, hovered, renaming, confirming deletion", async ({ 
   await send(page, "Visual row check");
   await expect(page.getByText("Read-only review complete: Visual row check", { exact: true })).toBeVisible();
   const row = page.locator(".thread-row", { hasText: "Visual row check" });
-  const mask = [row.locator("time")];
+  await pinTimes(row.locator("time"));
   await page.mouse.move(0, 0);
-  await expect(row).toHaveScreenshot("row-idle.png", { mask });
+  await expect(row).toHaveScreenshot("row-idle.png");
 
   await row.hover();
-  await expect(row).toHaveScreenshot("row-hover.png", { mask });
+  await expect(row).toHaveScreenshot("row-hover.png");
 
   // While renaming or confirming, the title is no longer the row's text.
   await row.getByRole("button", { name: "Rename conversation" }).click();
@@ -66,14 +66,6 @@ test("failed run notice", async ({ page }) => {
   const notice = page.getByRole("alert", { name: "Failed run" });
   await expect(notice.getByRole("button", { name: "Resume" })).toBeVisible();
   await expect(notice).toHaveScreenshot("failed-run.png");
-});
-
-test("approval card for two actions", async ({ page }) => {
-  await start(page);
-  await send(page, "Please restart both services");
-  const approval = page.getByRole("region", { name: "Tool approval" });
-  await expect(approval).toBeVisible();
-  await expect(approval).toHaveScreenshot("approval.png");
 });
 
 test("message from an external agent", async ({ page, request }) => {

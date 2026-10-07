@@ -93,6 +93,7 @@ main { flex: 1; min-width: 0; display: flex; flex-direction: column; background:
 .tool-call-status { color: var(--ag-muted); border-color: var(--line); }
 .tool-call-status[data-status=executing], .tool-call-status[data-status=inProgress] { color: var(--warn); }
 .tool-call-status[data-status=failed] { color: var(--danger); }
+.tool-call-status[data-status=rejected], .tool-call-status[data-status=stopped] { color: var(--warn); }
 .tool-call-body { padding: 0 14px 14px; display: grid; gap: 8px; }
 .tool-call-body .eyebrow { margin-top: 6px; }
 .tool-call-note { margin: 0; font: 12px ui-monospace, monospace; color: var(--text); }
@@ -115,6 +116,8 @@ main { flex: 1; min-width: 0; display: flex; flex-direction: column; background:
 .decision-buttons { display: flex; gap: 8px; }
 .decision-buttons button { border: 1px solid var(--line); padding: 7px 15px; border-radius: 5px; font-size: 12px; background: var(--raised); color: var(--text); }
 .decision-buttons button[aria-pressed=true] { background: var(--accent-light); color: var(--bg); border-color: var(--accent-light); }
+.approval-actions { display: flex; gap: 8px; align-items: center; }
+.approval-actions button:not(.primary) { border: 1px solid var(--line); padding: 8px 15px; border-radius: 5px; font-size: 13px; background: transparent; color: var(--text); }
 .sidebar[data-collapsed] { width: 76px; padding-inline: 12px; align-items: center; }
 .sidebar-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .collapse-toggle { position: relative; display: grid; place-items: center; width: 38px; height: 38px; flex-shrink: 0; border: 0; border-radius: 10px; background: transparent; color: var(--ag-muted); }

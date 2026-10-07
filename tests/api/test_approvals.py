@@ -7,7 +7,8 @@ import json
 import socket
 from contextlib import asynccontextmanager
 from copy import deepcopy
-from unittest.mock import MagicMock
+from typing import ClassVar
+from unittest.mock import MagicMock, patch
 from uuid import uuid4
 
 import httpx
@@ -21,6 +22,7 @@ from langgraph.checkpoint.memory import InMemorySaver
 
 from argus.api.app import build_app
 from argus.config import AgentConfig, ArgusConfig, ProviderEntry
+from tests.fakes import InMemoryHistory
 
 
 class ToolCallingModel(BaseChatModel):
@@ -72,6 +74,7 @@ def approval_app(tmp_path, monkeypatch):
         worker_count=1,
         checkpointer=None,
         history=None,
+        model=None,
         **options,
     ):
         if mcp:
@@ -79,7 +82,7 @@ def approval_app(tmp_path, monkeypatch):
         else:
             monkeypatch.delenv("ARGUS_MCP_TOKEN", raising=False)
         calls = calls or [restart_call()]
-        worker = ToolCallingModel(tool_calls=calls)
+        worker = model or ToolCallingModel(tool_calls=calls)
         planner = (
             ToolCallingModel(
                 tool_calls=[
@@ -272,6 +275,89 @@ async def test_cancel_rejects_every_action_in_the_interrupt(approval_app):
         )
         assert_finished(events)
         docker_client.containers.get.assert_not_called()
+
+
+class InsistentModel(ToolCallingModel):
+    """Asks for its tools on every turn, as a model that retries a refused call would, and
+    records each turn's tool choice."""
+
+    tool_choices: ClassVar[list] = []
+
+    def bind_tools(self, tools, *, tool_choice=None, **kwargs):
+        self.tool_choices.append(tool_choice)
+        return self
+
+    def _generate(self, messages, stop=None, **kwargs) -> ChatResult:
+        message = AIMessage(content="I wanted to restart it.", tool_calls=deepcopy(self.tool_calls))
+        return ChatResult(generations=[ChatGeneration(message=message)])
+
+
+def transcript(events: list[dict]) -> list[dict]:
+    return [event for event in events if event["type"] == "MESSAGES_SNAPSHOT"][-1]["messages"]
+
+
+async def test_a_rejection_leaves_the_next_turn_without_tools(approval_app):
+    model = InsistentModel(tool_calls=[restart_call()])
+    app, docker_client = approval_app(model=model)
+    thread_id = str(uuid4())
+    async with client_for(app) as client:
+        (interrupt,) = pending_interrupts(await run_agent(client, run_input(thread_id)))
+        model.tool_choices.clear()
+        events = await run_agent(client, run_input(thread_id, resume=[answer(interrupt, "reject")]))
+        # One more turn, which may only explain; its retry of the call is dropped.
+        assert_finished(events)
+        assert model.tool_choices == ["none"]
+        docker_client.containers.get.assert_not_called()
+        messages = transcript(events)
+        assert "Do not retry it" in next(m for m in messages if m["role"] == "tool")["content"]
+        assert messages[-1] == {**messages[-1], "role": "assistant", "content": "I wanted to restart it."}
+        assert not messages[-1].get("toolCalls")
+        ids = [m["id"] for m in messages]
+        assert "None" not in ids and len(set(ids)) == len(ids)
+
+
+@pytest.mark.parametrize("delegated", [False, True], ids=["planner", "worker"])
+async def test_stopping_at_an_approval_ends_the_run(approval_app, delegated):
+    app, docker_client = approval_app(
+        delegated=delegated, calls=[restart_call(), restart_call("second-service")]
+    )
+    thread_id = str(uuid4())
+    async with client_for(app) as client:
+        (interrupt,) = pending_interrupts(await run_agent(client, run_input(thread_id)))
+        turns = MagicMock(side_effect=AssertionError("the model was called after the stop"))
+        with patch.object(ToolCallingModel, "_generate", turns):
+            events = await run_agent(
+                client, run_input(thread_id, resume=[answer(interrupt, status="cancelled")])
+            )
+        assert_finished(events)
+        turns.assert_not_called()
+        docker_client.containers.get.assert_not_called()
+        messages = transcript(events)
+        assert messages[-1]["content"] == "Stopped by the operator."
+        ids = [m["id"] for m in messages]
+        assert "None" not in ids and len(set(ids)) == len(ids)
+        # The thread takes a new request afterwards.
+        assert not [e for e in await run_agent(client, run_input(thread_id)) if e["type"] == "RUN_ERROR"]
+
+
+async def test_stop_closes_an_unfinished_run(approval_app):
+    app, docker_client = approval_app(history=InMemoryHistory())
+    thread_id = str(uuid4())
+    async with client_for(app) as client:
+        pending_interrupts(await run_agent(client, run_input(thread_id)))
+        response = await client.post(f"/api/threads/{thread_id}/stop")
+        assert response.json() == {"stopped": True}
+        # Nothing left to resume, approve, or run.
+        run_state = await client.get(f"/api/threads/{thread_id}/run-state")
+        assert run_state.json() == {"stalled": False, "pending": []}
+        replay = await client.get(f"/api/threads/{thread_id}/connect")
+        events = [json.loads(line[6:]) for line in replay.text.splitlines() if line.startswith("data: ")]
+        assert_finished(events)
+        assert transcript(events)[-1]["content"] == "Stopped by the operator."
+        docker_client.containers.get.assert_not_called()
+        # A finished thread has nothing to stop.
+        response = await client.post(f"/api/threads/{thread_id}/stop")
+        assert response.json() == {"stopped": False}
 
 
 async def test_batched_decisions_apply_to_the_matching_actions(approval_app):

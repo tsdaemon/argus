@@ -28,6 +28,7 @@ from langchain_openai import ChatOpenAI
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.graph.state import CompiledStateGraph
 
+from argus.agent.approvals import ApprovalOutcomeMiddleware
 from argus.agent.cost import CostRecorder
 from argus.agent.identity import SenderIdentityMiddleware
 from argus.agent.memory import memory_middleware, seed_workspace
@@ -105,7 +106,9 @@ def build_graph(
         specs.extend(provider_specs)
     # The worker inherits `interrupt_on`, so it needs the classifications those read.
     classifier = classification_middleware(policy, specs)
-    extra_middleware = [SenderIdentityMiddleware(), *([classifier] if classifier else [])]
+    extra_middleware = [
+        SenderIdentityMiddleware(), ApprovalOutcomeMiddleware(), *([classifier] if classifier else [])
+    ]
     if unattended:
         extra_middleware.append(
             UnattendedMiddleware(policy, {external_name(s.tool_id): s for s in specs})

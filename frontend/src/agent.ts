@@ -13,7 +13,23 @@ export interface RunState {
 
 /** CopilotKit's chat lifecycle connects through this read-only history stream. */
 export class ArgusHttpAgent extends HttpAgent {
+  /** The operator's stop of the live run, settling on the server; its aborted stream is not a failure. */
+  stopping: Promise<unknown> | null = null;
+
+  // CopilotKit aborts the run for the chat's stop button. Dropping the stream cancels the
+  // run on the server; `/stop` then closes its checkpoint so it does not read as interrupted.
+  abortRun() {
+    const live = this.isRunning;
+    super.abortRun();
+    if (live) {
+      this.stopping = fetch(`/api/threads/${encodeURIComponent(this.threadId)}/stop`, { method: "POST" })
+        .catch(() => undefined);
+    }
+  }
+
   protected connect(input: RunAgentInput) {
+    // A stopped run leaves the controller aborted; reconnecting afterwards needs a fresh one.
+    if (this.abortController.signal.aborted) this.abortController = new AbortController();
     return transformHttpEventStream(runHttpRequest(() => this.fetch(
       `/api/threads/${encodeURIComponent(input.threadId)}/connect?run_id=${encodeURIComponent(input.runId)}`,
       { headers: { Accept: "text/event-stream" }, signal: this.abortController.signal },

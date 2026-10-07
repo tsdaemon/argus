@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Literal
 from uuid import UUID
 
@@ -150,6 +151,22 @@ def add_chat_routes(
         if str(thread_id) in running:
             return {"stalled": False, "pending": []}
         return await agent.run_state(str(thread_id))
+
+    @app.post("/api/threads/{thread_id}/stop")
+    async def stop(thread_id: UUID):
+        """The operator's stop: the browser has dropped the run's stream, which cancels the
+        run here; once it has wound down, its checkpoint is closed as stopped."""
+        for _ in range(100):
+            if str(thread_id) not in running:
+                break
+            await asyncio.sleep(0.05)
+        else:
+            raise HTTPException(409, "The run is still stopping; try again.")
+        stopped = await agent.stop(str(thread_id))
+        if stopped and history is not None:
+            messages, _ = await agent.thread_snapshot(str(thread_id))
+            await archive_messages(history, thread_id, messages)
+        return {"stopped": stopped}
 
     @app.get("/api/threads/{thread_id}/connect")
     async def connect(thread_id: UUID, request: Request, run_id: str = "replay"):

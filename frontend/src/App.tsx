@@ -90,20 +90,30 @@ function Chat({ thread, onBusy, onFinished }: {
   const [uploadError, setUploadError] = useState("");
   const [runError, setRunError] = useState("");
   const pending = agent.pendingInterrupts.length > 0;
+  const http = agent as unknown as ArgusHttpAgent;
+  const stopping = useCallback(() => http.stopping, [http]);
   useInterrupt({ render: (props) => <Approvals key={props.interrupts.map((i) => i.id).join()} {...props} /> });
   useEffect(() => {
     const subscription = agent.subscribe({
       onRunStartedEvent: () => { onBusy(true); setStalled(null); setUploadError(""); setRunError(""); },
       onRunErrorEvent: ({ event }) => {
+        if (stopping()) return;
         setRunError(event.message || "The run failed.");
         // A run that failed partway can usually carry on from its last step.
         api<RunState>(`/api/threads/${thread.id}/run-state`)
           .then((state) => setStalled(state.stalled ? state : null)).catch(() => {});
       },
-      onRunFinalized: () => { setConnecting(false); setResuming(false); onBusy(false); onFinished(); },
+      onRunFinalized: () => {
+        setConnecting(false); setResuming(false); onBusy(false); onFinished();
+        const stop = stopping();
+        if (stop) {
+          // Show the transcript as the server closed it, ending in "Stopped by the operator."
+          void stop.then(() => { http.stopping = null; return copilotkit.connectAgent({ agent }); });
+        }
+      },
     });
     return () => { subscription.unsubscribe(); onBusy(false); };
-  }, [agent, thread.id, onBusy, onFinished]);
+  }, [agent, copilotkit, http, stopping, thread.id, onBusy, onFinished]);
 
   const resume = useCallback(() => {
     setResuming(true);

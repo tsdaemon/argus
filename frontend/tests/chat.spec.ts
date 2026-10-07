@@ -74,6 +74,43 @@ test("batch approval requires a decision for each action", async ({ page, reques
   expect((await (await request.get("/__test__/operations")).json()).length).toBe(before + 1);
 });
 
+test("a run can be stopped at its approval, and nothing runs", async ({ page, request }) => {
+  const before = (await (await request.get("/__test__/operations")).json()).length;
+  await start(page);
+  await send(page, "Please restart both services");
+  const approval = page.getByRole("region", { name: "Tool approval" });
+  await approval.getByRole("button", { name: "Stop run" }).click();
+  await expect(page.getByText("Stopped by the operator.", { exact: true })).toBeVisible();
+  await expect(approval).toHaveCount(0);
+  await expect(page.locator(".tool-call-status")).toHaveText(["stopped", "stopped"]);
+  expect((await (await request.get("/__test__/operations")).json()).length).toBe(before);
+  await send(page, "Check the media service");
+  await expect(page.getByText("Read-only review complete: Check the media service", { exact: true })).toBeVisible();
+  await page.reload();
+  await expect(page.getByText("Stopped by the operator.", { exact: true })).toBeVisible();
+  await expect(approval).toHaveCount(0);
+});
+
+test("a run can be stopped while a tool runs, and stays stopped", async ({ page, request }) => {
+  await start(page);
+  await send(page, "Run the slow check");
+  // While a run streams, the send button is its stop button.
+  const stop = page.getByTestId("copilot-send-button");
+  // The fake ssh command runs until it is cancelled.
+  await page.waitForTimeout(1000);
+  await stop.click();
+  await expect(page.getByText("Stopped by the operator.", { exact: true })).toBeVisible();
+  await expect(page.locator(".tool-call-status")).toHaveText(["stopped"]);
+  await expect(page.getByRole("alert")).toHaveCount(0);
+  const thread = new URL(page.url()).searchParams.get("thread");
+  expect(await (await request.get(`/api/threads/${thread}/run-state`)).json()).toEqual({ stalled: false, pending: [] });
+  await page.reload();
+  await expect(page.getByText("Stopped by the operator.", { exact: true })).toBeVisible();
+  await expect(page.getByRole("status").filter({ hasText: "Resuming" })).toHaveCount(0);
+  await send(page, "Check the media service");
+  await expect(page.getByText("Read-only review complete: Check the media service", { exact: true })).toBeVisible();
+});
+
 test("mobile chat fits the viewport and history failures can be retried", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.route("**/api/threads?*", (route) => route.fulfill({ status: 503 }));
