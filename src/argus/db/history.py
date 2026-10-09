@@ -44,7 +44,10 @@ class HistoryRepository(Protocol):
         """Delete a conversation and everything under it; False if it does not exist."""
 
     async def save_chat_messages(self, thread_id: uuid.UUID, messages: list) -> None:
-        """Upsert AG-UI messages by their stable ID, never deleting earlier ones."""
+        """Upsert AG-UI messages by their stable ID, never deleting earlier ones.
+
+        NUL characters (binary tool output) are stored as U+FFFD: JSONB cannot hold them.
+        """
 
     async def chat_messages(self, thread_id: uuid.UUID) -> list:
         """AG-UI messages in first-seen order, each with `metadata.argus_time` (first seen)."""
@@ -62,6 +65,17 @@ TIME_KEY = "argus_time"
 def with_time(message: dict, at: datetime) -> dict:
     """Stamp a message for display; the stored content never carries it."""
     return {**message, "metadata": {**message.get("metadata", {}), TIME_KEY: at.isoformat()}}
+
+
+def without_nul(value: Any) -> Any:
+    """`value` with every NUL in its strings replaced by U+FFFD, which JSONB accepts."""
+    if isinstance(value, str):
+        return value.replace("\x00", "\ufffd")
+    if isinstance(value, dict):
+        return {without_nul(k): without_nul(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [without_nul(v) for v in value]
+    return value
 
 
 def make_engine(database_url: str) -> AsyncEngine:
@@ -166,7 +180,7 @@ class SqlHistory:
 
     async def save_chat_messages(self, thread_id: uuid.UUID, messages: list) -> None:
         async with self._session.begin() as session:
-            for message in messages:
+            for message in map(without_nul, messages):
                 statement = insert(Message).values(
                     id=uuid.uuid4(),
                     thread_id=thread_id,

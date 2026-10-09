@@ -17,7 +17,7 @@ from google.protobuf.json_format import MessageToDict, ParseDict
 from argus.db.a2a import interrupted, owner, task_page
 from argus.db.admin import AdminAccount
 from argus.db.breakglass import PENDING, BreakGlassRequest
-from argus.db.history import with_time
+from argus.db.history import with_time, without_nul
 from argus.db.tokens import ApiToken, now
 
 
@@ -92,7 +92,7 @@ class InMemoryHistory:
 
     async def save_chat_messages(self, thread_id: uuid.UUID, messages: list) -> None:
         stored = self._messages.setdefault(thread_id, {})
-        for message in messages:
+        for message in map(without_nul, messages):
             # An update keeps the original position and time.
             at = stored[message["id"]][1] if message["id"] in stored else datetime.now(UTC)
             stored[message["id"]] = (message, at)

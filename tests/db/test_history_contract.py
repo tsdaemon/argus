@@ -89,6 +89,16 @@ async def test_chat_messages_upsert_in_first_seen_order(history):
     assert await history.chat_messages(await history.create_thread()) == []
 
 
+async def test_chat_messages_store_binary_output_without_nul(history):
+    thread_id = await history.create_thread()
+    output = {"id": "out", "role": "tool", "content": "exit 0\n\x7fELF\x01\x00\x00"}
+    await history.save_chat_messages(thread_id, [output])
+
+    (saved,) = await history.chat_messages(thread_id)
+
+    assert saved["content"] == "exit 0\n\x7fELF\x01\ufffd\ufffd"
+
+
 async def test_chat_messages_keep_the_time_they_were_first_saved(history):
     thread_id = await history.create_thread()
     await history.save_chat_messages(

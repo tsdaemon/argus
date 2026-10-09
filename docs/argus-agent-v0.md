@@ -1690,3 +1690,16 @@ mid-tool (no auto-resume after reload); 25 passed. Real services: ssh to `argus@
 pinned key (groups, `sudo -n`, docker, journal); `ssh_run` with the real jev classifier on
 theseus: `docker ps | wc -l` → read, ran; `sudo touch`/`rm` → mutate, run directly as if
 approved. Not checked: the deployed argus (not redeployed) and an approval in the live UI.
+
+### 2026-10-09 — Binary tool output broke a thread's stream
+
+The deployed UI showed "network error" on each approval in one thread. An `ssh_run` output
+there held an ELF binary with NUL bytes; Postgres JSONB rejects `\u0000`, so archiving the
+`MESSAGES_SNAPSHOT` raised mid-stream and the browser saw a dropped connection. The
+checkpoint kept the message, so every later run in the thread failed the same way (9 times in
+the deployed log). `save_chat_messages` now stores NULs as U+FFFD (`without_nul`, in the SQL
+repository and the fake).
+
+Verified: `tests/db` 51 passed against local Postgres (no skips), including the new contract
+test; full pytest 339 passed, 28 skipped (no Postgres in that run). Not checked: the deployed
+argus (not redeployed); the affected thread should recover on its next run once it is.
